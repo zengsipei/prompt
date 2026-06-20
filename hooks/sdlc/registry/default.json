@@ -1,0 +1,59 @@
+{
+  "$schema": "内置默认工具编排表：抽象步骤 → 有序工具链（优先→降级）。项目可在 docs/_sdlc/registry.json 覆盖；用 sdlc-flow 把口语流程沉淀进去。",
+  "steps": {
+    "collect-context": {
+      "summary": "收集任务上下文：现状、技术栈、约束、相似实现与历史结论",
+      "tools": [
+        { "name": "项目知识库检索（如 ai_localbase）", "note": "优先：查历史方案、既有风险与决策，命中即复用" },
+        { "name": "语义检索（如 codebase-retrieval）", "note": "探索性理解代码上下文" },
+        { "name": "Grep / Glob / Read", "note": "降级：原生检索" }
+      ]
+    },
+    "locate-code": {
+      "summary": "定位待修改代码与相关调用点",
+      "tools": [
+        { "name": "语义检索（如 codebase-retrieval / codegraph）", "note": "首选：按语义定位" },
+        { "name": "code-index", "note": "降级 1" },
+        { "name": "Grep / Glob / Read", "note": "降级 2：原生" }
+      ]
+    },
+    "deep-think": {
+      "summary": "复杂问题分析、风险识别、方案权衡",
+      "tools": [
+        { "name": "sequential-thinking", "note": "复杂分析优先使用" },
+        { "name": "内联结构化推理", "note": "降级：直接分步推理并记录" }
+      ]
+    },
+    "plan-tasks": {
+      "summary": "任务拆解与规模评估",
+      "tools": [
+        { "name": "shrimp-task-manager", "note": "plan_task / analyze_task / reflect_task / split_tasks" },
+        { "name": "onlyAI/task-plan.json", "note": "降级：直接写机器可读任务计划（含 allowedPaths）" }
+      ]
+    },
+    "query-db": {
+      "summary": "数据库查询（MySQL / PG / Mongo / Redis）",
+      "tools": [
+        { "name": "db-query skill", "note": "首选；连续 3 次失败才降级" },
+        { "name": "mysql-query skill", "note": "降级：仅 MySQL" }
+      ]
+    },
+    "web-search": {
+      "summary": "联网检索补充事实依据",
+      "tools": [
+        { "name": "grok-search skill", "note": "首选" },
+        { "name": "exa-pool MCP", "note": "降级 1" },
+        { "name": "chrome-devtools / 原生 web search", "note": "降级 2" }
+      ]
+    },
+    "run-tests": {
+      "summary": "本地执行单元 / 冒烟 / 功能测试，绝不接 CI",
+      "tools": [
+        { "name": "项目既有测试命令", "note": "沿用项目构建与测试编排" },
+        { "name": "本地手动验证", "note": "降级：把过程与结论记录到 onlyAI/verification.md" }
+      ]
+    }
+  },
+  "phasePreconditions": {},
+  "order": ["design", "implement", "test", "debug"]
+}

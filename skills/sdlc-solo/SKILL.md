@@ -1,0 +1,16 @@
+---
+name: sdlc-solo
+description: SDLC 单人快速模式——边界清晰、预计 ≤3 天的小任务，AI 可自动决策。用户提到 sdlc-solo 时使用。共享语义见 software-dev-process。
+---
+
+# sdlc-solo
+
+solo 模式：边界清晰、预计 ≤3 天。用 lite profile 走最短路径。
+
+```bash
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/[task] --system [system] --profile lite
+```
+
+设计 / 施工 / 测试压缩进 `onlyAI/task-plan.json` + `onlyAI/verification.md` 或 `summary.md`。遇真实待确认项，**AI 可自动决策**，但必须在设计文档写明选择理由、风险、取舍——**不要把自动决策伪装成用户确认**。
+
+硬约束不豁免：红线、（若已声明的）施工边界与项目前置门禁仍硬拦。solo 只是把**软流程**压到最短，不动硬边界。

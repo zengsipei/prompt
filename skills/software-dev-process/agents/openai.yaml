@@ -1,7 +1,7 @@
 interface:
   display_name: "software-dev-process"
-  short_description: "指令: sdlc-design-1 sdlc-design-2 sdlc-implement sdlc-test sdlc-debug"
-  default_prompt: "Use $software-dev-process to continue the workflow with sdlc-design-1, sdlc-design-2, sdlc-implement, sdlc-test, or sdlc-debug."
+  short_description: "路由: sdlc-design sdlc-implement sdlc-test sdlc-debug sdlc-solo sdlc-flow"
+  default_prompt: "Use $software-dev-process to route into sdlc-design, sdlc-implement, sdlc-test, sdlc-debug, sdlc-solo, or sdlc-flow."
 
 policy:
   allow_implicit_invocation: true

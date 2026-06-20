@@ -4,60 +4,62 @@ import {
   currentStatePath,
   ensureDir,
   loadCurrentState,
+  readJsonIfExists,
   saveHookState,
   workspaceRoot,
   writeJson,
 } from "../core/context.mjs";
 import {
   implementationAllowedPaths,
+  inferAllowedPathsFromGit,
+  isLifecyclePath,
   lifecycleDocPaths,
+  loadTaskPlan,
   phaseCompletion,
+  phasePreconditionsUnmet,
   pendingConfirmations,
   sdlcProfile,
+  taskPlanPath,
 } from "../core/artifacts.mjs";
+import { effectiveFlow, loadRegistry, resolveStep } from "../core/registry.mjs";
 import { evaluate } from "../core/rules.mjs";
 import { printJson } from "../core/result.mjs";
 import { inferTargetPaths, parseArgs } from "./common.mjs";
 
-const PHASE_ORDER = ["design-1", "design-2", "implement", "test"];
+// 默认阶段顺序（软建议）：design-1/design-2 已合并为 design。
+const PHASE_ORDER = ["design", "implement", "test"];
 const PROFILE_ARTIFACTS = {
   lite: {
-    "design-1": ["onlyAI/task-plan.json"],
-    "design-2": ["onlyAI/task-plan.json"],
+    design: ["onlyAI/task-plan.json"],
     implement: ["onlyAI/task-plan.json"],
     test: ["onlyAI/verification.md", "summary.md"],
   },
   standard: {
-    "design-1": ["001-概要设计.md"],
-    "design-2": ["onlyAI/task-plan.json"],
+    design: ["001-概要设计.md", "onlyAI/task-plan.json"],
     implement: ["onlyAI/task-plan.json", "003-文件改动记录.md"],
     test: ["onlyAI/verification.md"],
   },
   full: {
-    "design-1": ["001-概要设计.md"],
-    "design-2": ["002-详细设计.md", "003-施工文档.md"],
+    design: ["001-概要设计.md", "002-详细设计.md", "003-施工文档.md"],
     implement: ["003-施工文档.md", "003-文件改动记录.md", "onlyAI/operations-log.md"],
     test: ["004-测试用例.md", "005-测试报告.md", "onlyAI/verification.md"],
   },
 };
 const PROFILE_RECOMMENDED_READS = {
   lite: {
-    "design-1": ["prd/", "onlyAI/task-plan.json"],
-    "design-2": ["onlyAI/task-plan.json"],
+    design: ["prd/", "onlyAI/task-plan.json"],
     implement: ["onlyAI/task-plan.json", "onlyAI/verification.md"],
     test: ["onlyAI/verification.md", "summary.md"],
     debug: ["006-Debug排查记录.md", "onlyAI/verification.md"],
   },
   standard: {
-    "design-1": ["prd/", "001-概要设计.md"],
-    "design-2": ["001-概要设计.md", "onlyAI/task-plan.json"],
+    design: ["prd/", "001-概要设计.md", "onlyAI/task-plan.json"],
     implement: ["onlyAI/task-plan.json", "003-文件改动记录.md", "onlyAI/verification.md"],
     test: ["onlyAI/verification.md"],
     debug: ["006-Debug排查记录.md", "onlyAI/verification.md"],
   },
   full: {
-    "design-1": ["prd/", "onlyAI/structured-request.json", "onlyAI/context-scan.json"],
-    "design-2": ["001-概要设计.md", "prd/"],
+    design: ["prd/", "001-概要设计.md", "002-详细设计.md", "003-施工文档.md"],
     implement: ["003-施工文档.md", "onlyAI/task-plan.json", "onlyAI/operations-log.md"],
     test: ["004-测试用例.md", "onlyAI/verification.md", "onlyAI/testing.md"],
     debug: ["006-Debug排查记录.md", "onlyAI/operations-log.md", "onlyAI/verification.md"],
@@ -77,19 +79,31 @@ export function runManual(argv = process.argv.slice(2)) {
     return status(root);
   }
 
-  if (command === "phase.enter") {
-    return runEvent({ name: "phase.enter", phase: args.phase }, root);
+  // 仪式吸收进 skill：phase.set 是主入口，phase.enter 作别名——都只“设阶段 + 软提示”，不再硬门禁。
+  if (command === "phase.set" || command === "phase.enter") {
+    return setPhase(args, root);
   }
 
   if (command === "phase.exit") {
-    return runEvent(
-      {
-        name: "phase.exit",
-        phase: args.phase,
-      },
-      root,
-      { requireComplete: args["allow-incomplete"] !== true },
-    );
+    return runEvent({ name: "phase.exit", phase: args.phase }, root);
+  }
+
+  // 施工边界声明自动化：从 git diff 播种 task-plan.json 的 allowedPaths（§4）。
+  if (command === "scope.infer") {
+    return scopeInfer(root);
+  }
+
+  // 工具编排 registry：查看有效流程 / 解析某抽象步骤的工具链。
+  if (command === "registry") {
+    const sub = args._[0] || "show";
+    if (sub === "show") {
+      return registryShow(root);
+    }
+    return printJson({ usage: ["registry show"] });
+  }
+
+  if (command === "step") {
+    return stepShow(root, args._[0] || args.step);
   }
 
   if (command === "tool.before") {
@@ -128,7 +142,7 @@ function initLifecycle(args, root) {
   const activeTaskDir = args["task-dir"].replace(/\\/g, "/");
   const state = {
     activeTaskDir,
-    phase: args.phase || "design-1",
+    phase: args.phase || "design",
     mode: args.mode || "enforce",
     strict: args.strict !== "false",
     stopGate: args["stop-gate"] || "warn",
@@ -145,6 +159,80 @@ function initLifecycle(args, root) {
     message: "SDLC lifecycle initialized.",
     state,
   });
+}
+
+function setPhase(args, root) {
+  const raw = readJsonIfExists(currentStatePath(root), null);
+  if (!raw) {
+    printJson({ decision: "deny", reason: "Lifecycle not initialized; run init first." });
+    process.exitCode = 2;
+    return;
+  }
+
+  const target = args.phase;
+  if (!target) {
+    throw new Error("phase.set requires --phase design|implement|test|debug");
+  }
+
+  writeJson(currentStatePath(root), { ...raw, phase: target });
+
+  // 软提示（跳级 / 未满足前置）。phase.set 恒放行。
+  const result = evaluate(
+    { name: "phase.set", platform: "manual", phase: target },
+    { cwd: root, state: loadCurrentState(root) },
+  );
+  printJson({
+    decision: result.decision === "deny" ? "deny" : "allow",
+    phase: target,
+    severity: result.severity,
+    message: result.message || result.reason,
+  });
+}
+
+function scopeInfer(root) {
+  const state = loadCurrentState(root);
+  if (!state?.activeTaskDir) {
+    printJson({ decision: "deny", reason: "No active task; run init first." });
+    process.exitCode = 2;
+    return;
+  }
+
+  const inferred = Array.from(inferAllowedPathsFromGit(root))
+    .filter((item) => !isLifecyclePath(item, state))
+    .sort();
+  const plan = loadTaskPlan(state, root) || {};
+  const merged = new Set(Array.isArray(plan.allowedPaths) ? plan.allowedPaths : []);
+  for (const item of inferred) {
+    merged.add(item);
+  }
+  plan.allowedPaths = Array.from(merged).sort();
+
+  const planPath = taskPlanPath(state, root);
+  writeJson(planPath, plan);
+  printJson({
+    decision: "allow",
+    message: inferred.length > 0
+      ? "Seeded施工边界 allowedPaths from git diff."
+      : "git 无改动可推断；allowedPaths 未变（无声明时施工边界退化为只提示）。",
+    inferred,
+    allowedPaths: plan.allowedPaths,
+    taskPlan: `${state.activeTaskDir}/onlyAI/task-plan.json`,
+  });
+}
+
+function registryShow(root) {
+  printJson({ decision: "allow", flow: effectiveFlow(loadRegistry(root)) });
+}
+
+function stepShow(root, name) {
+  if (!name) {
+    throw new Error("step requires a step name, e.g. step locate-code");
+  }
+  const resolved = resolveStep(loadRegistry(root), name);
+  if (!resolved) {
+    return printJson({ decision: "allow", step: name, found: false, message: `Unknown step: ${name}` });
+  }
+  printJson({ decision: "allow", step: resolved });
 }
 
 function status(root) {
@@ -165,6 +253,8 @@ export function statusPayload(root) {
     requiredArtifacts: requiredArtifacts(state, root),
     recommendedReads: recommendedReads(state),
     allowedPaths: allowedPaths(state, root),
+    phasePreconditions: state ? phasePreconditionsUnmet(state, root, state.phase) : [],
+    flow: effectiveFlow(loadRegistry(root)),
   };
 }
 
@@ -191,8 +281,10 @@ function help() {
     usage: [
       "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/[task] --system [system] --profile lite|standard|full",
       "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.enter --phase design-2",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.exit --phase design-1",
+      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement",
+      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs scope.infer",
+      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs registry show",
+      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs step locate-code",
       "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs tool.before --action fs.edit --path src/foo.ts",
       "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs session.stop --require-complete",
     ],
@@ -225,29 +317,17 @@ function nextAction(state, completion, pending) {
 }
 
 function blockingReasons(state, completion, pending) {
-  const reasons = [];
   if (!state) {
     return ["docs/_sdlc/current.json is missing."];
   }
 
+  const reasons = [];
   if (pending.length > 0) {
     reasons.push(`Pending confirmations: ${pending.map((item) => item.name).join(", ")}.`);
   }
-
-  if (state.phase === "design-2" && !completion["design-1"]) {
-    reasons.push("design-1 is not complete.");
-  }
-  if (state.phase === "implement" && !completion["design-2"]) {
-    reasons.push("design-2 is not complete.");
-  }
-  if (state.phase === "test" && !completion.implement) {
-    reasons.push("implement is not complete.");
-  }
-
   if (!completion[state.phase]) {
     reasons.push(`Current phase ${state.phase} is incomplete.`);
   }
-
   return reasons;
 }
 

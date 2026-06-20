@@ -1,76 +1,77 @@
 ---
 name: software-dev-process
-description: 使用仓库级 SDLC hooks 管理需求、设计、施工、测试和排查。用于用户明确提到 sdlc-design-1、sdlc-design-2、sdlc-implement、sdlc-test、sdlc-debug、sdlc-solo，或要求按本仓库 SDLC 流程推进时。
+description: 仓库级 SDLC 的路由与共享语义。用户提到 sdlc-design / sdlc-implement / sdlc-test / sdlc-debug / sdlc-solo / sdlc-flow，或要求按本仓库 SDLC 推进、但不确定进哪个阶段时使用。
 ---
 
-# Software Development Process
+# Software Development Process（路由）
 
-本 Skill 只弥补 AI agent 的信息盲区：如何进入仓库级 SDLC hooks、哪些状态语义不能靠直觉推断、以及哪些文件是人工协作契约。流程规则的权威实现不在这里，在 `hooks/sdlc/core`。
+把开发拆成可独立触发的阶段 skill。本 skill 只做两件事：**路由**（该用哪个）+ 沉淀**所有阶段共享、不能靠直觉推断的语义**。各阶段的步骤在各自 skill 里。
+
+## 拱顶石：边界硬，流程软
+
+- **流程顺序可偏离**（软）：可跳级、可边设计边写原型；hooks 只 warn + 留痕。
+- **声明的必做动作硬拦**（hooks block，不降级为建议）：内置红线、施工边界 `allowedPaths`、待确认文档、项目经 registry 声明的前置门禁。
+- 冲突优先级：红线 > 硬门禁 > 任务目标 > 项目惯例。
+
+## 路由：用哪个阶段 skill
+
+| 触发词 | skill | 何时 |
+|---|---|---|
+| sdlc-design | `sdlc-design` | 需求理解、概要/详细设计、待确认 |
+| sdlc-implement | `sdlc-implement` | 在施工边界内写代码 + 留痕 |
+| sdlc-test | `sdlc-test` | 验证本次改动的风险面 |
+| sdlc-debug | `sdlc-debug` | 复现、定位、修复、回归 |
+| sdlc-solo | `sdlc-solo` | 边界清晰 ≤3 天、可自动决策的小任务 |
+| sdlc-flow | `sdlc-flow` | 把口语流程沉淀为项目 registry（工具编排 + 硬前置） |
+
+不确定就先看 `status` 的 `nextAction`，按它走。
 
 ## 首要动作
 
-命中本 Skill 后，不要先通读历史任务文档。按需执行：
+进入任一阶段前，先取状态（**不要**先通读历史任务文档）：
 
 ```bash
 node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status
 ```
 
-如果需要直接看原始状态，只读：
-
-- `docs/_sdlc/current.json`
-- `sdlc-hook status` 返回的 `recommendedReads`
-- 当前任务目录下与下一步有关的文件，例如 `onlyAI/task-plan.json`、`003-施工文档.md`、`onlyAI/operations-log.md`
-
-只有当当前文件不能回答下一步问题时，才继续读源码或历史文档。目录结构、依赖、配置能自然推断出的内容不要写进新文档，也不要反复检索。
+只读 status 的 `recommendedReads` 与 `docs/_sdlc/current.json`；当前文件回答不了下一步时，才扩大检索。能从代码、目录、依赖、配置一眼看出的事实不写进新文档，也不反复检索。
 
 ## Hooks 是权威
 
-生命周期准入、阶段完成度、待确认阻塞、施工边界都由 hooks 判定。Skill 文本不能覆盖 hook 结果。
+准入、施工边界、待确认、前置门禁都由 hooks 判定，skill 文本不能覆盖 hook 结果。被拒就满足拒绝消息指出的条件，不要绕开边界改源文件。
 
-常用入口：
+## 仪式吸收进 skill
+
+阶段 skill 自己调 `phase.set` 设阶段；你和用户**永不手敲** phase.enter/exit。开局只 `init` 轻声明一次（task dir / system / profile）：
 
 ```bash
 node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/[task] --system [system] --profile lite|standard|full
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.enter --phase design-2
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.exit --phase design-1
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs tool.before --action fs.edit --path [path]
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement
 ```
 
-如果 hook 拒绝操作，优先满足拒绝消息指出的生命周期条件；不要绕开边界继续改源文件。
+## 工具编排：抽象步骤 + registry
+
+阶段 skill 只提**抽象步骤**（`collect-context` / `locate-code` / `deep-think` / `plan-tasks` / `query-db` / `web-search` / `run-tests`）。具体工具链（优先→降级）由 registry 解析，内置默认可被项目覆盖：
+
+```bash
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs step locate-code   # 取该抽象步骤的工具链
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs registry show       # 看项目的有效流程
+```
+
+换工具只改 registry、不改 skill。把项目口语流程沉淀成 registry → 用 `sdlc-flow`。
 
 ## 不明显但重要的语义
 
-- `docs/_sdlc/current.json` 的 `activeTaskDir` 是当前任务根，后续 SDLC 文档默认落在这里。
-- `profile` 控制必需产物：`lite` 用于 0.5 天内低风险小改；`standard` 是默认；`full` 才使用完整阶段文档、测试报告和自审。
-- `status.md` 或 `init --system` 中的系统名是任务归属系统；总结、索引和后续知识沉淀不要临时改名。
-- 施工阶段优先以 `onlyAI/task-plan.json` 的 `allowedPaths` 作为机器可读边界；不存在时才回退到 `003-施工文档.md` 中用反引号显式列出的路径。
-- `sdlc-hook status` 的 `nextAction`、`blockingReasons`、`recommendedReads`、`allowedPaths` 是给 agent 减少猜测用的，先信它们再扩大搜索。
-- 待确认文档会阻塞源文件编辑和阶段切换。可识别的已处理标记是 `状态：已处理` 或 `决策状态：已决策`。
-- `onlyAI/` 是过程记录区，适合放扫描、执行、验证和自审记录；不要把面向用户的正式结论只写在 `onlyAI/`。
-- SQL 变更脚本放在当前任务目录的 `sql/`，避免散落到源码目录或聊天记录。
+- `current.json` 的 `activeTaskDir` 是当前任务根，后续 SDLC 文档默认落在这里。
+- `profile`：`lite`=0.5 天内低风险小改；`standard`=默认；`full`=完整阶段文档+测试报告+自审。profile 还调软门禁档位（lite 最松、full 最严）。
+- `systemName` 是任务归属系统，后续索引与知识沉淀沿用，别临时改名。
+- 待确认已处理的可识别标记：`状态：已处理` 或 `决策状态：已决策`。
+- `onlyAI/` 是过程记录区（扫描、执行、验证、自审）；面向用户的正式结论不要只写在 `onlyAI/`。
+- SQL 变更脚本放当前任务目录的 `sql/`，不散落到源码目录或聊天记录。
 
 ## 产物策略
 
-只产出本阶段真实需要的文档。不要为了填满模板制造低价值章节；已能从代码、目录、依赖或配置一眼看出的事实不写。
+只产出本阶段真实需要的文档，不为填满模板制造低价值章节。模板在 `skills/software-dev-process/assets/`（**勿改模板本身**）：
 
-使用模板时从本 Skill 的 `assets/` 读取：
-
-- `概要设计模板.md`
-- `详细设计模板.md`
-- `施工文档模板.md`
-- `文件改动记录模板.md`
-- `测试用例模板.md`
-- `测试报告模板.md`
-- `Debug排查记录模板.md`
-- `待确认模板.md`
-
-## 阶段工作准则
-
-- 设计阶段：只在存在真实方案分歧、业务不确定、外部依赖不明或风险需要用户承担时生成待确认文档。
-- 施工阶段：先确认 `allowedPaths`，再改代码；施工记录默认写文件、意图和验证结果，只有 `full` 或审计需要时写行号范围。
-- 测试阶段：验证要覆盖本次改动的风险面，不追求大而全；`lite`/`standard` 可合并到 `onlyAI/verification.md`，`full` 才拆分测试用例、测试报告和自审。
-- Debug 阶段：记录复现、定位证据、修复点和回归结果，避免把猜测写成结论。
-
-## Solo 模式
-
-`sdlc-solo` 只适合边界清晰、预计不超过 3 天的任务。遇到真实待确认项时，AI 可以自动决策，但必须在对应设计文档中写明选择理由、风险和取舍；不要把自动决策伪装成用户确认。
+- `概要设计模板.md` / `详细设计模板.md` / `施工文档模板.md` / `文件改动记录模板.md`
+- `测试用例模板.md` / `测试报告模板.md` / `Debug排查记录模板.md` / `待确认模板.md`

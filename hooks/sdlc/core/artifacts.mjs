@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { readJsonIfExists, readTextIfExists, taskPath, toPosixPath } from "./context.mjs";
+import { loadRegistry, registryPhasePreconditions } from "./registry.mjs";
 
 const CONFIRMATION_DONE_PATTERNS = [
   /(?:\*\*)?状态(?:\*\*)?[：:]\s*已处理/u,
@@ -63,8 +65,7 @@ export function sdlcProfile(state) {
 export function phaseCompletion(state, root) {
   if (!state?.activeTaskDir) {
     return {
-      "design-1": false,
-      "design-2": false,
+      design: false,
       implement: false,
       test: false,
       debug: false,
@@ -85,19 +86,28 @@ export function phaseCompletion(state, root) {
   const summary = taskPath(state, root, "summary.md");
   const profile = sdlcProfile(state);
 
-  const design1Complete =
-    fileExists(design1Doc) && confirmationStatus(design1Confirmation) !== "pending";
-  const design2Complete =
-    fileExists(detailDoc) &&
-    fileExists(buildDoc) &&
+  // 待确认未处理直接判定设计未完成（与硬 pending 拦截一致）。
+  const confirmationsHandled =
+    confirmationStatus(design1Confirmation) !== "pending" &&
     confirmationStatus(design2Confirmation) !== "pending";
-  const taskPlanComplete = fileExists(taskPlan) && confirmationStatus(design2Confirmation) !== "pending";
+  const taskPlanExists = fileExists(taskPlan);
+  const tasksDone = implementationTasksCompleted(state, root, readTextIfExists(buildDoc));
+
+  // design-1（概要）与 design-2（详细）合并为单一 design 阶段，完成度按 profile 递进。
+  let designComplete;
+  if (profile === "lite") {
+    designComplete = taskPlanExists && confirmationsHandled;
+  } else if (profile === "standard") {
+    designComplete = fileExists(design1Doc) && taskPlanExists && confirmationsHandled;
+  } else {
+    designComplete =
+      fileExists(design1Doc) && fileExists(detailDoc) && fileExists(buildDoc) && confirmationsHandled;
+  }
 
   if (profile === "lite") {
     return {
-      "design-1": taskPlanComplete && confirmationStatus(design1Confirmation) !== "pending",
-      "design-2": taskPlanComplete,
-      implement: taskPlanComplete && implementationTasksCompleted(state, root, readTextIfExists(buildDoc)),
+      design: designComplete,
+      implement: designComplete && tasksDone,
       test: fileExists(verification) || fileExists(summary),
       debug: fileExists(taskPath(state, root, "006-Debug排查记录.md")),
     };
@@ -105,26 +115,16 @@ export function phaseCompletion(state, root) {
 
   if (profile === "standard") {
     return {
-      "design-1": design1Complete,
-      "design-2": design1Complete && taskPlanComplete,
-      implement:
-        design1Complete &&
-        taskPlanComplete &&
-        fileExists(changeRecord) &&
-        implementationTasksCompleted(state, root, readTextIfExists(buildDoc)),
+      design: designComplete,
+      implement: designComplete && fileExists(changeRecord) && tasksDone,
       test: fileExists(verification),
       debug: fileExists(taskPath(state, root, "006-Debug排查记录.md")),
     };
   }
 
   return {
-    "design-1": design1Complete,
-    "design-2": design2Complete,
-    implement:
-      design2Complete &&
-      fileExists(changeRecord) &&
-      fileExists(operationsLog) &&
-      implementationTasksCompleted(state, root, readTextIfExists(buildDoc)),
+    design: designComplete,
+    implement: designComplete && fileExists(changeRecord) && fileExists(operationsLog) && tasksDone,
     test: fileExists(testCases) && fileExists(testReport) && fileExists(verification),
     debug: fileExists(taskPath(state, root, "006-Debug排查记录.md")),
   };
@@ -253,4 +253,50 @@ export function isAllowedImplementationPath(relativePath, state, root) {
   }
 
   return false;
+}
+
+// 从 git 推断“已在场”的文件集：相对 HEAD 的改动（staged+unstaged）∪ 未跟踪新文件。
+// 用于 scope.infer 自动播种施工边界声明，避免手维护清单（§4 声明自动化）。
+// 不是 git 仓库或 git 不可用时返回空集合——调用方据此退化为只提示。
+export function inferAllowedPathsFromGit(root) {
+  const paths = new Set();
+  const commands = [
+    ["diff", "--name-only", "HEAD"],
+    ["ls-files", "--others", "--exclude-standard"],
+  ];
+
+  for (const args of commands) {
+    try {
+      const out = execFileSync("git", ["-C", root, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      for (const line of out.split(/\r?\n/u)) {
+        const value = line.trim();
+        if (value) {
+          paths.add(toPosixPath(value).replace(/\/+$/u, ""));
+        }
+      }
+    } catch {
+      // git 不可用或非仓库：忽略该来源。
+    }
+  }
+
+  return paths;
+}
+
+// 项目声明的硬前置门禁（registry.phasePreconditions[phase]）中，尚未满足的项。
+// 前置以“某产物文件须存在”表达——复用 fileExists，无需新仪式（§8）。无 requireArtifact 的前置无法机器校验，跳过（留给 skill 软引导）。
+export function phasePreconditionsUnmet(state, root, phase) {
+  if (!state?.activeTaskDir) {
+    return [];
+  }
+
+  const registry = loadRegistry(root);
+  return registryPhasePreconditions(registry, phase).filter((pre) => {
+    if (!pre || typeof pre.requireArtifact !== "string" || !pre.requireArtifact.trim()) {
+      return false;
+    }
+    return !fileExists(taskPath(state, root, pre.requireArtifact.trim()));
+  });
 }

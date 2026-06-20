@@ -1,7 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const PHASES = ["design-1", "design-2", "implement", "test", "debug"];
+export const PHASES = ["design", "implement", "test", "debug"];
+
+// 按 profile 分档的软门禁矩阵。硬门禁（红线、施工边界、pending、项目前置门禁）不在此处——它们恒为 block，
+// 不随 profile 浮动。这里只放“流程序列”一类的软约束：可偏离、按 profile 决定 off/warn/block。
+const GATE_MATRIX = {
+  // 默认阶段顺序（跳级 / 乱序）
+  phaseOrder: { lite: "off", standard: "warn", full: "warn" },
+  // “设计期不许碰源码”——软化后允许边设计边写原型
+  designSourceEdit: { lite: "off", standard: "warn", full: "warn" },
+  // 施工边界：声明集非空时的拦截力度；空集合由调用方退化为 warn
+  boundary: { lite: "warn", standard: "block", full: "block" },
+  // 会话 Stop 时阶段完整度
+  stop: { lite: "off", standard: "warn", full: "block" },
+};
+
+// 取某 profile 下某条软门禁的档位：off（放行不留痕）/ warn（放行+留痕）/ block（拦截）。
+export function gateLevel(profile, gateName) {
+  const row = GATE_MATRIX[gateName];
+  if (!row) {
+    return "off";
+  }
+  const key = String(profile || "standard").trim().toLowerCase();
+  return row[key] || row.standard || "warn";
+}
 
 export function workspaceRoot(options = {}) {
   return path.resolve(options.cwd || process.env.SDLC_WORKSPACE || process.cwd());
@@ -82,7 +105,7 @@ export function loadCurrentState(root = workspaceRoot()) {
   return {
     mode: "enforce",
     strict: true,
-    phase: "design-1",
+    phase: "design",
     stopGate: "warn",
     ...state,
     activeTaskDir,

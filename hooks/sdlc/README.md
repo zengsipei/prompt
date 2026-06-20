@@ -53,7 +53,7 @@ Minimal `current.json`:
 ```json
 {
   "activeTaskDir": "docs/login-fix",
-  "phase": "design-1",
+  "phase": "design",
   "mode": "enforce",
   "strict": true,
   "stopGate": "warn",
@@ -77,11 +77,17 @@ questions or planning-only turns.
 ```bash
 node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile lite
 node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.enter --phase design-2
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.exit --phase design-1
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs scope.infer
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs registry show
+node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs step locate-code
 node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs tool.before --action fs.edit --path src/login.ts
 node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs session.stop --require-complete
 ```
+
+Phases are `design / implement / test / debug` (former design-1/design-2 are merged into
+`design`). Skills self-call `phase.set`; humans never type `phase.enter`/`phase.exit`.
+`scope.infer` seeds the construction boundary from `git diff` into `onlyAI/task-plan.json`.
 
 `status` returns both raw lifecycle state and agent guidance:
 
@@ -135,11 +141,38 @@ The example manifests are for manual or legacy user-level hook wiring with an
 absolute `<SDLC_RUNTIME>` path. The core rules do not depend on either
 platform.
 
-## Enforced Rules
+## Hard vs Soft（边界硬，流程软）
 
-1. Source edits are blocked until `docs/_sdlc/current.json` exists.
-2. Design phases may write lifecycle docs, but not source files.
-3. Pending confirmation documents block source edits.
-4. Implementation edits must stay within `onlyAI/task-plan.json` allowed paths.
-   If no task plan exists, Markdown construction docs are parsed as fallback.
-5. Phase exit and manual stop can require phase artifacts to be complete.
+权威按「关心」拆分。**流程序列**可偏离（软）；**声明的必做动作**硬拦（block，不降级）。
+
+硬（block）：
+
+1. 内置红线（恒 block，最高优先级）：删 `package.json`/`tsconfig.json`、SQL `DROP`/`ALTER COLUMN`、`git push` 主分支。见 `core/redlines.mjs`。
+2. 待确认文档未处理：冻结源码编辑。
+3. 项目声明的前置门禁：`registry.phasePreconditions[phase]` 要求的产物缺失时，冻结该阶段源码编辑。
+4. 施工边界 `allowedPaths`（implement）：越界编辑按 profile block；**未声明任何边界时退化为 warn**。
+
+软（warn + 留痕，按 profile 分档，见 `core/context.mjs` 的 `GATE_MATRIX`）：
+
+- 默认阶段顺序（跳级 / 乱序）、设计期改源码、Stop 完整度。
+- `lite` 最松（多为 off）、`standard` 默认、`full` 最严（Stop 可 block）。
+
+`phase.set` 恒放行，只对跳级 / 未满足前置给软提示——仪式吸收进 skill。
+
+## Registry（工具编排）
+
+抽象步骤 → 有序工具链（优先 → 降级）。内置默认 `registry/default.json`，项目覆盖
+`docs/_sdlc/registry.json`（深合并：`steps`/`phasePreconditions` 按键覆盖、`order` 整体替换）。
+
+```json
+{
+  "steps": { "locate-code": { "tools": [{ "name": "codegraph" }, { "name": "grep/glob/read", "note": "降级" }] } },
+  "phasePreconditions": {
+    "implement": [{ "step": "locate-code", "requireArtifact": "onlyAI/locate-code.md", "reason": "codegraph 检索待修改部分" }]
+  }
+}
+```
+
+工具「选哪个」是软推荐（registry + 降级）；「这一步必须发生」可被项目声明为硬前置门禁
+（`requireArtifact` 存在与否，由 hook 在该阶段源码编辑处硬拦）。用 `sdlc-flow` skill
+把口语流程沉淀进项目 registry，用 `registry show` 回看。
