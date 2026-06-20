@@ -24,6 +24,7 @@ import {
 import { effectiveFlow, loadRegistry, resolveStep } from "../core/registry.mjs";
 import { evaluate } from "../core/rules.mjs";
 import { printJson } from "../core/result.mjs";
+import { hookCommand, RUNTIME_ROOT } from "../core/runtime.mjs";
 import { inferTargetPaths, parseArgs } from "./common.mjs";
 
 // 默认阶段顺序（软建议）：design-1/design-2 已合并为 design。
@@ -148,6 +149,7 @@ function initLifecycle(args, root) {
     stopGate: args["stop-gate"] || "warn",
     profile: sdlcProfile({ profile: args.profile }),
     systemName: args.system || args["system-name"] || "",
+    runtimeRoot: RUNTIME_ROOT,
     createdAt: new Date().toISOString(),
   };
 
@@ -248,6 +250,7 @@ export function statusPayload(root) {
     completion,
     pendingConfirmations: pending.map((item) => item.name),
     profile: sdlcProfile(state),
+    runtimeRoot: RUNTIME_ROOT,
     nextAction: nextAction(state, completion, pending),
     blockingReasons: blockingReasons(state, completion, pending),
     requiredArtifacts: requiredArtifacts(state, root),
@@ -279,14 +282,14 @@ function runEvent(event, root, options = {}) {
 function help() {
   printJson({
     usage: [
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/[task] --system [system] --profile lite|standard|full",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs scope.infer",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs registry show",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs step locate-code",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs tool.before --action fs.edit --path src/foo.ts",
-      "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs session.stop --require-complete",
+      `${hookCommand()} init --task-dir docs/[task] --system [system] --profile lite|standard|full`,
+      `${hookCommand()} status`,
+      `${hookCommand()} phase.set --phase implement`,
+      `${hookCommand()} scope.infer`,
+      `${hookCommand()} registry show`,
+      `${hookCommand()} step locate-code`,
+      `${hookCommand()} tool.before --action fs.edit --path src/foo.ts`,
+      `${hookCommand()} session.stop --require-complete`,
     ],
   });
 }

@@ -8,7 +8,7 @@ description: SDLC 测试阶段——验证本次改动的风险面。用户提�
 测试阶段：覆盖本次改动的风险面，不求大而全。
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase test
+sdlc-hook phase.set --phase test
 ```
 
 ## 步骤

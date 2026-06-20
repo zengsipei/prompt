@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-debug"
+  short_description: "SDLC 排查阶段：复现、定位、修复、回归"
+  default_prompt: "Use $sdlc-debug to turn guesses into evidence: reproduce, locate root cause, fix minimally, regress."
+
+policy:
+  allow_implicit_invocation: true

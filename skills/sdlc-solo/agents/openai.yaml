@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-solo"
+  short_description: "SDLC 单人快速模式：边界清晰 ≤3 天小任务，AI 可自动决策"
+  default_prompt: "Use $sdlc-solo for small, clearly-scoped (<=3 day) tasks via the lite profile; auto-decide but document choices. Hard gates still apply."
+
+policy:
+  allow_implicit_invocation: true

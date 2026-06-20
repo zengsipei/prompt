@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-implement"
+  short_description: "SDLC 施工阶段：在已声明的施工边界内写代码并留痕"
+  default_prompt: "Use $sdlc-implement to code task-by-task within the declared construction boundary, recording file changes."
+
+policy:
+  allow_implicit_invocation: true

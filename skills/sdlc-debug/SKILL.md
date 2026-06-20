@@ -8,7 +8,7 @@ description: SDLC 排查阶段——复现、定位、修复、回归。用户�
 排查阶段：把猜测变证据。
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase debug
+sdlc-hook phase.set --phase debug
 ```
 
 ## 步骤

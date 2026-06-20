@@ -34,8 +34,13 @@ only needs lifecycle state files under `docs/`.
 Manual or unsupported platforms call the same core from the project root:
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs status
 ```
+
+`<RUNTIME_ROOT>` self-resolves from the runtime's own on-disk location (dev repo /
+global `~/.claude` / plugin dir), so hook messages, `help`, and `status.runtimeRoot`
+all emit the resolved absolute path. For self-use install and wiring, run the
+`sdlc-setup` skill.
 
 ## State Contract
 
@@ -75,14 +80,14 @@ questions or planning-only turns.
 ## Manual Commands
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile lite
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs scope.infer
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs registry show
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs step locate-code
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs tool.before --action fs.edit --path src/login.ts
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs session.stop --require-complete
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile lite
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs status
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs scope.infer
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs registry show
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs step locate-code
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs tool.before --action fs.edit --path src/login.ts
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs session.stop --require-complete
 ```
 
 Phases are `design / implement / test / debug` (former design-1/design-2 are merged into
@@ -138,7 +143,7 @@ Task `status` values considered complete: `done`, `completed`, `complete`,
 - Neutral event manifest: `hooks/sdlc/manifests/sdlc-hooks.json`
 
 The example manifests are for manual or legacy user-level hook wiring with an
-absolute `<SDLC_RUNTIME>` path. The core rules do not depend on either
+absolute `<RUNTIME_ROOT>` path. The core rules do not depend on either
 platform.
 
 ## Hard vs Soft（边界硬，流程软）

@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-flow"
+  short_description: "把口语流程沉淀进项目 registry：工具编排 + 硬前置门禁"
+  default_prompt: "Use $sdlc-flow to capture a project's spoken workflow into its registry (tool chains + hard preconditions)."
+
+policy:
+  allow_implicit_invocation: true

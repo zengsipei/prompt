@@ -13,6 +13,7 @@ import {
 } from "./artifacts.mjs";
 import { allow, block, warn } from "./result.mjs";
 import { detectRedline } from "./redlines.mjs";
+import { hookCommand } from "./runtime.mjs";
 
 const WRITE_ACTIONS = new Set(["fs.write", "fs.edit", "fs.delete"]);
 const KNOWN_SOURCE_EXTENSIONS = new Set([
@@ -59,15 +60,20 @@ export function sessionContextMessage(state) {
     lines.push(bootstrap, "");
   }
 
+  // 公布运行时根：bootstrap 与 skill 里的 `sdlc-hook X` 简写 = 下面这条真实可执行命令。
+  // 自解析，跨 dev / 全局(~/.claude) / 插件安装都对——取代旧的 <SDLC_RUNTIME> 占位符。
+  lines.push(`运行时：把 \`sdlc-hook\` 简写展开为 \`${hookCommand()}\``, "");
+
   if (!state) {
     lines.push(
-      "SDLC 生命周期尚未初始化（本仓库无 docs/_sdlc/current.json）。",
-      "改源码前先经路由 skill `software-dev-process` 走 init 轻声明一次。",
+      "SDLC 生命周期尚未初始化（无 docs/_sdlc/current.json）。",
+      "首次用本项目 SDLC → `/sdlc-setup` 初始化（装 skills/hooks + 建项目状态）；想先弄懂流程或怎么手动用 skill → `/sdlc-ask`。",
     );
   } else {
     lines.push(
       `当前任务：${state.activeTaskDir || "未设置"}　阶段：${state.phase || "未设置"}　profile：${state.profile || "standard"}`,
       "流程顺序可偏离（软，会留痕）；红线 / 施工边界 / 待确认 / 项目声明的前置门禁会被硬拦。",
+      "不确定下一步 → 先看 `sdlc-hook status` 的 nextAction，或问 `/sdlc-ask`。",
     );
   }
 
@@ -173,7 +179,7 @@ function evaluateBeforeTool(event, state, root) {
         [
           "SDLC lifecycle is not initialized.",
           "Create docs/_sdlc/current.json or run init via the router skill `software-dev-process`:",
-          "node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/[task-dir] --system [system-name] --profile lite|standard|full",
+          `${hookCommand()} init --task-dir docs/[task-dir] --system [system-name] --profile lite|standard|full`,
           "Source edits and write-like commands need lifecycle state first.",
         ].join("\n"),
       );

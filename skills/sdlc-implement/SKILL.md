@@ -10,14 +10,14 @@ description: SDLC 施工阶段——在已声明的施工边界内写代码并�
 进入即设阶段：
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement
+sdlc-hook phase.set --phase implement
 ```
 
 ## 先满足硬门禁（否则源码编辑被 block）
 
 - **施工边界 `allowedPaths`**：先声明，可自动播种——
   ```bash
-  node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs scope.infer   # 从 git diff 写入 task-plan.json
+  sdlc-hook scope.infer   # 从 git diff 写入 task-plan.json
   ```
   也可在 `003-施工文档.md` 用反引号列出文件，或直接写进 `onlyAI/task-plan.json` 的 `allowedPaths`。改边界外文件会被硬拦（standard/full）；无声明时退化为只提示（lite/solo）。
 - **项目前置门禁**：若项目 registry 声明了 implement 前置（如「codegraph 检索待修改部分」），**必须先产出对应产物**，否则源码编辑被硬拦。`status` 的 `phasePreconditions` 列出未满足项。

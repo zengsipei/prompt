@@ -1,19 +1,19 @@
 # Copy these entries into the user Codex config that your Codex version loads.
-# Replace <SDLC_RUNTIME> with the absolute path to the user-level runtime.
+# Replace <RUNTIME_ROOT> with the absolute path to the user-level runtime.
 # Projects do not need to copy hooks/sdlc; they only store docs/_sdlc state.
 #
 # Codex event names used here: sessionStart, preToolUse, postToolUse, stop.
 
 [hooks]
 sessionStart = [
-  { command = "node <SDLC_RUNTIME>/hooks/sdlc/bin/codex-hook.mjs sessionStart" }
+  { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs sessionStart" }
 ]
 preToolUse = [
-  { command = "node <SDLC_RUNTIME>/hooks/sdlc/bin/codex-hook.mjs preToolUse" }
+  { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs preToolUse" }
 ]
 postToolUse = [
-  { command = "node <SDLC_RUNTIME>/hooks/sdlc/bin/codex-hook.mjs postToolUse" }
+  { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs postToolUse" }
 ]
 stop = [
-  { command = "node <SDLC_RUNTIME>/hooks/sdlc/bin/codex-hook.mjs stop" }
+  { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs stop" }
 ]

@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-ask"
+  short_description: "讲解 SDLC 流程、答疑、指导手动使用各 skill（只读，不改状态）"
+  default_prompt: "Use $sdlc-ask to explain the SDLC process, answer 'what's next / why was I blocked', and guide manual skill use. Read-only: never mutates state or runs gated actions."
+
+policy:
+  allow_implicit_invocation: true

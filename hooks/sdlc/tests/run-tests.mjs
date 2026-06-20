@@ -13,6 +13,7 @@ import {
 } from "../core/artifacts.mjs";
 import { loadRegistry, resolveStep } from "../core/registry.mjs";
 import { statusPayload } from "../adapters/manual.mjs";
+import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
 
 function makeWorkspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-hooks-"));
@@ -54,6 +55,20 @@ function event(extra) {
 }
 
 function run() {
+  // runtime 根解析：自解析落在真实运行时（含 CLI 入口，验证上溯路径正确）；override 生效；
+  // hookCommand 给出可执行真实命令，不含未解析占位符。
+  {
+    assert.ok(RUNTIME_ROOT.length > 0, "RUNTIME_ROOT 非空");
+    assert.ok(
+      fs.existsSync(path.join(RUNTIME_ROOT, "hooks", "sdlc", "bin", "sdlc-hook.mjs")),
+      "RUNTIME_ROOT 应指向含 CLI 入口的真实运行时根",
+    );
+    assert.equal(resolveRuntimeRoot(), RUNTIME_ROOT);
+    assert.equal(resolveRuntimeRoot("/custom/root"), "/custom/root");
+    assert.equal(hookCommand(), `node "${RUNTIME_ROOT}/hooks/sdlc/bin/sdlc-hook.mjs"`);
+    assert.ok(!hookCommand().includes("<"), "hookCommand 不含未解析占位符");
+  }
+
   // 结果序列化原语（result.mjs 未改）。
   {
     const allowed = allow("ok");

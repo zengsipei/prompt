@@ -4,7 +4,7 @@
 
 ## 安装模型
 
-推荐 **用户级安装 plugin/runtime，项目级保存状态**。
+推荐 **用户级安装 plugin/runtime，项目级保存状态**。自用最省心的入口是 `/sdlc-setup`（幂等：全局装 skills+hooks，并为当前项目初始化生命周期状态）——下面是其底层接入细节。
 
 - 用户级：把本仓库作为插件根安装，保存 `skills/`、平台专用 hook 配置和 `hooks/sdlc/` runtime。
 - 项目级：只生成 `docs/_sdlc/current.json`、`docs/_sdlc/hook-events.ndjson` 和任务目录。
@@ -26,11 +26,11 @@ hooks/sdlc/                   # SDLC runtime
 手动或旧配置接入时，用户级 hook 命令仍可使用绝对 runtime 路径，例如：
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile standard
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs status
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile standard
 ```
 
-`<SDLC_RUNTIME>` 是本仓库或你安装到用户目录的插件/runtime 路径。命令的工作目录应是当前业务项目根目录；也可以用 `SDLC_WORKSPACE` 显式指定项目根。
+`<RUNTIME_ROOT>` 是 runtime 所在目录（本仓库或装到用户目录的副本）。runtime 从自身位置自解析该路径——hook 报错、`help`、skill 命令拿到的都是已解析的真实路径，`status` 的 `runtimeRoot` 也会打印它，通常不必手填。命令工作目录应为当前业务项目根，也可用 `SDLC_WORKSPACE` 显式指定。
 
 平台接入示例：
 
@@ -49,7 +49,7 @@ node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix 
 查看当前状态：
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs status
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs status
 ```
 
 `status` 会返回：
@@ -75,7 +75,7 @@ agent 应优先使用这些字段，避免反复检索历史文档。
 初始化时选择：
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile lite
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile lite
 ```
 
 默认是 `standard`。

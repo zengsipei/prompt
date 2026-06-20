@@ -10,7 +10,7 @@ description: SDLC 设计阶段——需求理解、概要/详细设计、待确�
 进入即设阶段：
 
 ```bash
-node <SDLC_RUNTIME>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase design
+sdlc-hook phase.set --phase design
 ```
 
 ## 步骤

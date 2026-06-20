@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-setup"
+  short_description: "初始化/安装本项目 SDLC：全局 skills+hooks（Claude/Codex）与项目生命周期状态"
+  default_prompt: "Use $sdlc-setup to install the SDLC skills+hooks globally and/or initialize lifecycle state for this project. Idempotent."
+
+policy:
+  allow_implicit_invocation: true

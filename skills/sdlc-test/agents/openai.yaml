@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-test"
+  short_description: "SDLC 测试阶段：验证本次改动的风险面，本地执行"
+  default_prompt: "Use $sdlc-test to cover the risk surface of the current change with local tests; never delegate to CI."
+
+policy:
+  allow_implicit_invocation: true

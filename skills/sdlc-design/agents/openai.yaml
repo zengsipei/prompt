@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-design"
+  short_description: "SDLC 设计阶段：需求理解、概要/详细设计、待确认文档"
+  default_prompt: "Use $sdlc-design to converge requirements into a buildable design (concise/detailed by profile) and raise confirmations."
+
+policy:
+  allow_implicit_invocation: true

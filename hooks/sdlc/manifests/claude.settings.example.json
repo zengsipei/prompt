@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node <SDLC_RUNTIME>/hooks/sdlc/bin/claude-hook.mjs SessionStart"
+            "command": "node <RUNTIME_ROOT>/hooks/sdlc/bin/claude-hook.mjs SessionStart"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node <SDLC_RUNTIME>/hooks/sdlc/bin/claude-hook.mjs PreToolUse"
+            "command": "node <RUNTIME_ROOT>/hooks/sdlc/bin/claude-hook.mjs PreToolUse"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node <SDLC_RUNTIME>/hooks/sdlc/bin/claude-hook.mjs PostToolUse"
+            "command": "node <RUNTIME_ROOT>/hooks/sdlc/bin/claude-hook.mjs PostToolUse"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node <SDLC_RUNTIME>/hooks/sdlc/bin/claude-hook.mjs Stop"
+            "command": "node <RUNTIME_ROOT>/hooks/sdlc/bin/claude-hook.mjs Stop"
           }
         ]
       }
