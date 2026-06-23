@@ -33,7 +33,7 @@ description: SDLC 路由：用户要求按本仓流程推进但阶段不清时�
 进任一阶段前先取状态（**不要**先通读历史任务文档）：
 
 ```bash
-sdlc-hook status   # = node "<RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs" status；路径见 SessionStart「运行时」行或 status.runtimeRoot
+sdlc-hook status   # = node "<RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs" status；已初始化项目可看 SessionStart「运行时」行或 status.runtimeRoot，首次初始化走 sdlc-setup
 ```
 
 只读 status 的 `recommendedReads` 与 `docs/_sdlc/current.json`；当前文件回答不了下一步时才扩大检索。能从代码、目录、依赖一眼看出的事实不写进新文档，也不反复检索。

@@ -10,6 +10,8 @@
 - 项目级：只生成 `docs/_sdlc/current.json`、`docs/_sdlc/hook-events.ndjson` 和任务目录。
 - 不建议每个项目复制一份 `hooks/sdlc/`，否则流程规则会在项目之间漂移。
 
+未初始化的项目（没有 `docs/_sdlc/current.json`）不会被 SDLC 管理：全局 hooks 即使被平台触发，也直接 no-op，不注入上下文、不拦截工具、不写事件。项目调用 `sdlc-setup` / `sdlc-hook init` 后，hooks 才按该项目状态开始验证。
+
 本插件结构同时兼容 Codex 和 Claude Code：
 
 ```text
@@ -47,12 +49,12 @@ node hooks/sdlc/bin/generate-hook-configs.mjs
 
 ## 硬约束
 
-这些规则默认由 hooks 执行，不依赖 agent 自觉：
+项目初始化后，这些规则默认由 hooks 执行，不依赖 agent 自觉：
 
-- 未初始化生命周期时阻断源文件写入。
-- 设计阶段阻断源文件编辑。
 - 待确认文档未处理时阻断源文件编辑和阶段切换。
 - 实现阶段只允许修改 `onlyAI/task-plan.json` 或施工文档列出的路径，以及生命周期文档。
+
+设计阶段源码编辑是软约束：`lite` 静默放行，`standard` / `full` warn + 留痕，允许边设计边写原型；正式施工进入 `implement` 后再由施工边界硬拦。
 
 查看当前状态：
 
@@ -72,7 +74,7 @@ agent 应优先使用这些字段，避免反复检索历史文档。
 
 ## 风险档位
 
-`profile` 控制必需产物，不改变硬约束。
+`profile` 控制必需产物和软门禁力度，不改变红线、待确认、项目前置门禁、implement 施工边界等硬约束。
 
 | 档位 | 适用场景 | 必需产物 |
 | --- | --- | --- |

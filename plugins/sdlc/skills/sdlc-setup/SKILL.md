@@ -16,7 +16,7 @@ description: 初始化当前项目的 SDLC 生命周期状态；要求 sdlc plug
 
 ## 约定
 
-下文 `sdlc-hook` = `node "<RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs"`。`RUNTIME_ROOT` 取自 SessionStart 注入的「运行时」行，或 `sdlc-hook status` 输出的 `runtimeRoot`（runtime 自解析所在目录，不随项目变）。
+下文 `sdlc-hook` = `node "<RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs"`。`RUNTIME_ROOT` 是已安装 plugin/runtime 目录（例如 Codex 的 `codex plugin list` 会显示安装信息；已初始化项目的 `sdlc-hook status` 也会输出 `runtimeRoot`）。未初始化项目的全局 hooks 会 no-op，因此首次初始化不要依赖 SessionStart 注入路径。
 
 ## Step 1 · 检测项目状态
 
@@ -24,7 +24,7 @@ description: 初始化当前项目的 SDLC 生命周期状态；要求 sdlc plug
 2. 若存在，先执行 `sdlc-hook status`，把 `activeTaskDir`、`phase`、`profile`、`nextAction` 告诉用户。
 3. 若不存在，继续 Step 2。
 
-不要检测或改写 `~/.claude/`、`~/.codex/`、`~/.agents/plugins/`；这些属于 marketplace/plugin 安装层。
+不要改写 `~/.claude/`、`~/.codex/`、`~/.agents/plugins/`；这些属于 marketplace/plugin 安装层。若需要定位 runtime，只读查询插件列表或使用当前 skill 所在的已安装插件路径。
 
 ## Step 2 · 项目初始化
 

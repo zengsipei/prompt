@@ -54,7 +54,7 @@ function readBootstrap() {
   }
 }
 
-// SessionStart 注入：共享 bootstrap（角色+红线+约束优先级+路由索引+降级总则）+ 当前生命周期状态。
+// SessionStart 注入：仅对已初始化项目注入共享 bootstrap 与当前生命周期状态。
 // 两端（Codex/Claude）同源交付——这是双端 bootstrap 的 SSOT。
 export function sessionContextMessage(state) {
   const lines = [];
@@ -67,18 +67,11 @@ export function sessionContextMessage(state) {
   // 自解析，跨 dev / 全局(~/.claude) / 插件安装都对——取代旧的 <SDLC_RUNTIME> 占位符。
   lines.push(`运行时：把 \`sdlc-hook\` 简写展开为 \`${hookCommand()}\``, "");
 
-  if (!state) {
-    lines.push(
-      "SDLC 生命周期尚未初始化（无 docs/_sdlc/current.json）。",
-      "首次用当前项目 SDLC → `/sdlc-setup` 初始化项目状态；想先弄懂流程或怎么手动用 skill → `/sdlc-ask`。",
-    );
-  } else {
-    lines.push(
-      `当前任务：${state.activeTaskDir || "未设置"}　阶段：${state.phase || "未设置"}　profile：${state.profile || "standard"}`,
-      "流程顺序可偏离（软，会留痕）；红线 / 施工边界 / 待确认 / 项目声明的前置门禁会被硬拦。",
-      "不确定下一步 → 先看 `sdlc-hook status` 的 nextAction，或问 `/sdlc-ask`。",
-    );
-  }
+  lines.push(
+    `当前任务：${state.activeTaskDir || "未设置"}　阶段：${state.phase || "未设置"}　profile：${state.profile || "standard"}`,
+    "流程顺序可偏离（软，会留痕）；红线 / 施工边界 / 待确认 / 项目声明的前置门禁会被硬拦。",
+    "不确定下一步 → 先看 `sdlc-hook status` 的 nextAction，或问 `/sdlc-ask`。",
+  );
 
   return lines.join("\n");
 }
@@ -90,6 +83,10 @@ export function evaluate(event, options = {}) {
     targetPaths: [],
     ...event,
   };
+
+  if (!state) {
+    return allow("No SDLC lifecycle state; hook inactive.");
+  }
 
   let result;
   switch (normalizedEvent.name) {
@@ -160,10 +157,6 @@ export function evaluate(event, options = {}) {
 }
 
 function evaluateAfterTool(event, state, root) {
-  if (!state) {
-    return allow("Recorded SDLC hook event.");
-  }
-
   const recorded = recordRequiredCapabilityResult(state, root, event);
   if (!recorded) {
     return allow("Recorded SDLC hook event.");
@@ -193,7 +186,7 @@ function isTruthyEnv(value) {
 }
 
 function evaluateBeforeTool(event, state, root) {
-  // 0) 红线优先于一切——破坏性操作恒 block，不看 state / phase / profile。
+  // 0) 红线优先于一切——破坏性操作恒 block，不看 phase / profile。
   const redline = detectRedline(event);
   if (redline) {
     return redline;
@@ -204,24 +197,6 @@ function evaluateBeforeTool(event, state, root) {
   }
 
   const paths = event.targetPaths || [];
-  const sourceWrite = WRITE_ACTIONS.has(event.action) && paths.some((target) => !isLifecyclePath(target, state));
-
-  // 1) 无 state：开局轻声明一次（§8）。只拦写源码 / 写类命令；读类命令放行。
-  if (!state) {
-    const writeLikeCommand = event.action === "command.exec" && looksWriteLikeCommand(event.command || "");
-    if (sourceWrite || writeLikeCommand) {
-      return block(
-        [
-          "SDLC lifecycle is not initialized.",
-          "Create docs/_sdlc/current.json or run init via the router skill `software-dev-process`:",
-          `${hookCommand()} init --task-dir docs/[task-dir] --system [system-name] --profile lite|standard|full`,
-          "Source edits and write-like commands need lifecycle state first.",
-        ].join("\n"),
-      );
-    }
-    return allow("No lifecycle state; non-source action allowed.");
-  }
-
   const profile = sdlcProfile(state);
 
   if (event.action === "command.exec") {
@@ -283,14 +258,6 @@ function evaluateBeforeTool(event, state, root) {
 }
 
 export function promptGuidanceMessage(state, root = workspaceRoot()) {
-  if (!state) {
-    return [
-      "SDLC prompt guidance: lifecycle is not initialized.",
-      "If this turn starts implementation work, initialize with `/sdlc-setup` or `sdlc-hook init`; otherwise continue normally.",
-      "This prompt hook is advisory only and never blocks user prompts.",
-    ].join("\n");
-  }
-
   const summary = sdlcRuntimeSummary(state, root);
   const lines = [
     "SDLC prompt guidance (advisory, never a hard gate):",
@@ -313,10 +280,6 @@ export function promptGuidanceMessage(state, root = workspaceRoot()) {
 }
 
 function evaluatePreCompact(state, root) {
-  if (!state) {
-    return allow("No active SDLC lifecycle state to summarize for compaction.");
-  }
-
   const summary = sdlcRuntimeSummary(state, root);
   saveHookState(state, { compactSummary: summary }, root);
 
@@ -326,10 +289,6 @@ function evaluatePreCompact(state, root) {
 }
 
 function evaluatePostCompact(state, root) {
-  if (!state) {
-    return allow("No active SDLC lifecycle state after compaction.");
-  }
-
   const hookState = loadHookState(state, root);
   const summary = isRuntimeSummary(hookState.compactSummary)
     ? hookState.compactSummary
@@ -344,7 +303,7 @@ export function sdlcRuntimeSummary(state, root = workspaceRoot()) {
   const completion = phaseCompletion(state, root);
   const pending = pendingConfirmations(state, root);
   const unmet = phasePreconditionsUnmet(state, root, state?.phase);
-  const allowed = state ? implementationAllowedPaths(state, root) : new Set();
+  const allowed = implementationAllowedPaths(state, root);
   const taskPlan = loadTaskPlan(state, root);
   const taskCount = Array.isArray(taskPlan?.tasks) ? taskPlan.tasks.length : 0;
   const completedTaskCount = Array.isArray(taskPlan?.tasks)
@@ -386,9 +345,6 @@ export function sdlcRuntimeSummary(state, root = workspaceRoot()) {
 
 function satisfiedCapabilities(state, context) {
   const values = [];
-  if (!state) {
-    return values;
-  }
 
   values.push("lifecycle-state");
 
@@ -503,10 +459,6 @@ function evaluatePhasePreconditions(state, root) {
 
 // phase.set / phase.enter：恒放行（仪式吸收进 skill）。仅就“跳级”与“未满足前置”给软提示。
 function evaluatePhaseSet(event, state, root) {
-  if (!state) {
-    return block("Cannot set a phase before lifecycle is initialized (run init).");
-  }
-
   const target = event.phase || state.phase;
   const messages = [];
 
@@ -531,10 +483,6 @@ function evaluatePhaseSet(event, state, root) {
 }
 
 function evaluateStop(event, state, root, options = {}) {
-  if (!state) {
-    return allow("No active SDLC lifecycle state.");
-  }
-
   const profile = sdlcProfile(state);
   const phase = event.phase || state.phase;
   const complete = phaseCompletion(state, root);

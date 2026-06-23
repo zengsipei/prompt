@@ -148,6 +148,31 @@ function run() {
     assert.equal(readEvents(root), "");
   }
 
+  // 未初始化项目：全局 hook 被触发也直接 no-op，不注入、不拦截、不写 docs/_sdlc。
+  {
+    const root = makeWorkspace();
+    const events = [
+      { name: "session.start", platform: "test" },
+      { name: "prompt.submit", platform: "test", rawEventName: "UserPromptSubmit" },
+      { name: "compact.before", platform: "test", rawEventName: "PreCompact" },
+      { name: "compact.after", platform: "test", rawEventName: "PostCompact" },
+      { name: "tool.before", platform: "test", action: "fs.edit", targetPaths: ["src/login.ts"] },
+      { name: "tool.after", platform: "test", action: "fs.edit", targetPaths: ["src/login.ts"], success: true },
+      { name: "session.stop", platform: "test" },
+    ];
+
+    for (const item of events) {
+      const result = evaluate(item, { cwd: root });
+      assert.equal(result.decision, "allow");
+      assert.equal(result.severity, "info");
+      assert.equal(result.additionalContext, undefined);
+      assert.equal(result.reason, undefined);
+    }
+
+    assert.equal(readEvents(root), "");
+    assert.equal(fs.existsSync(path.join(root, "docs", "_sdlc")), false);
+  }
+
   // prompt.submit：只注入软指导并留痕，不阻断用户 prompt。
   {
     const root = makeWorkspace();
@@ -204,9 +229,10 @@ function run() {
     assert.equal(fs.existsSync(path.join(root, "docs", "login-fix", "summary.md")), false);
   }
 
-  // 红线：恒 block，优先于一切（无 state 也拦）。
+  // 红线：在已初始化 SDLC 项目内恒 block，优先于一切。
   {
     const root = makeWorkspace();
+    seedCurrent(root, { phase: "design" });
     const del = evaluate(
       { name: "tool.before", platform: "test", action: "fs.delete", targetPaths: ["package.json"] },
       { cwd: root },
@@ -233,20 +259,6 @@ function run() {
     );
     assert.equal(drop.decision, "deny");
     assert.match(drop.reason, /DROP/u);
-  }
-
-  // 无 state：写源码 block（轻声明一次）；只读命令放行（softened）。
-  {
-    const root = makeWorkspace();
-    const blocked = evaluate(event(), { cwd: root });
-    assert.equal(blocked.decision, "deny");
-    assert.match(blocked.reason, /not initialized/u);
-
-    const readCmd = evaluate(
-      { name: "tool.before", platform: "test", action: "command.exec", command: "ls -la", targetPaths: [] },
-      { cwd: root },
-    );
-    assert.equal(readCmd.decision, "allow");
   }
 
   // 设计期改源码：standard → warn 放行 + 留痕（不再 block）；lite → 静默放行。

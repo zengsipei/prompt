@@ -17,7 +17,7 @@ disable-model-invocation: true
 ```bash
 sdlc-hook status
 ```
-（`sdlc-hook` = `node "<RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs"`，路径见 SessionStart 注入的「运行时」行或 status 的 `runtimeRoot`。）
+（`sdlc-hook` = `node "<RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs"`；已初始化项目可从 SessionStart 注入的「运行时」行或 `status.runtimeRoot` 获取。未初始化项目先走 `sdlc-setup`，由已安装插件路径 / 插件列表定位 runtime。）
 
 `status` 给出 `nextAction`（下一步）、`blockingReasons`（被什么挡）、`phasePreconditions`（未满足的硬前置）、`allowedPaths`（当前施工边界）、`recommendedReads`（该读哪些）。基于它回答，别凭空猜。
 

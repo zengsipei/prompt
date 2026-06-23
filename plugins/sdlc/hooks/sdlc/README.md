@@ -32,6 +32,11 @@ hook config files through the manifest `hooks` field. Both configs call
 variable, so business projects do not need to copy `hooks/sdlc/`. The project
 only needs lifecycle state files under `docs/`.
 
+Project enforcement is opt-in. If `docs/_sdlc/current.json` is missing, platform
+hooks return immediately: no context injection, no tool blocking, no event log,
+and no `docs/_sdlc` creation. After `sdlc-setup` / `sdlc-hook init` creates the
+project state, the same global hooks start evaluating that project.
+
 Manual or unsupported platforms call the same core from the project root:
 
 ```bash
@@ -111,7 +116,8 @@ Phases are `design / implement / test / debug` (former design-1/design-2 are mer
 Use `recommendedReads` before searching broadly. Use `allowedPaths` to avoid
 guessing the current implementation boundary.
 
-Prompt and compact hooks are advisory continuity hooks, not gates:
+Prompt and compact hooks are advisory continuity hooks, not gates, and only run
+for initialized projects:
 
 - `UserPromptSubmit` injects soft SDLC guidance and records the event for debugging.
 - `PreCompact` saves `compactSummary` in `docs/[task-dir]/onlyAI/hook-state.json`.
