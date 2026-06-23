@@ -1,6 +1,7 @@
 ---
 name: sdlc-ask
 description: SDLC 答疑：用户问下一步、拦截原因、阶段产物、skill 用法或 profile 时使用；只读。
+disable-model-invocation: true
 ---
 
 # sdlc-ask
@@ -35,7 +36,7 @@ sdlc-hook status
 
 | 触发 | skill | 何时 |
 |---|---|---|
-| 安装/初始化 | `sdlc-setup` | 全局装 skills+hooks、或为项目建生命周期状态 |
+| 项目初始化 | `sdlc-setup` | 为当前项目建生命周期状态 |
 | 需求/设计/待确认 | `sdlc-design` | 需求理解、概要/详细设计 |
 | 写代码 | `sdlc-implement` | 在施工边界内编码 + 留痕 |
 | 验证 | `sdlc-test` | 验证本次改动风险面 |

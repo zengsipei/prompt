@@ -1,6 +1,6 @@
 {
   "name": "sdlc",
-  "version": "0.1.0+codex.20260607-164848",
+  "version": "0.1.0+codex.marketplace-layout-20260624",
   "description": "Hooks-first SDLC workflow runtime for AI-assisted software development.",
   "author": {
     "name": "zsp"

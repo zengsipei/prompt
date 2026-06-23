@@ -1,6 +1,6 @@
 # SDLC Bootstrap
 
-本仓库启用 hooks-first SDLC。**边界硬、流程软**：流程顺序可偏离（hooks warn + 留痕），声明的必做动作硬拦（hooks block）。完整流程、工具表、哲学在 skills 与 registry 里——本文件只是始终在 prompt 的薄入口，由 SessionStart 注入。
+当前会话启用 hooks-first SDLC。**边界硬、流程软**：流程顺序可偏离（hooks warn + 留痕），声明的必做动作硬拦（hooks block）。完整流程、工具表、哲学在 skills 与 registry 里——本文件只是始终在 prompt 的薄入口，由 SessionStart 注入。
 
 ## 角色
 
@@ -20,7 +20,7 @@
 
 ## 路由索引（进哪个 skill）
 
-- 初始化 / 安装本项目 SDLC → `sdlc-setup`　了解流程 / 怎么手动用 skill → `sdlc-ask`
+- 初始化当前项目 SDLC → `sdlc-setup`　了解流程 / 怎么手动用 skill → `sdlc-ask`
 - 不确定 / 总览 → `software-dev-process`（路由 + 共享语义）
 - 设计 → `sdlc-design`　施工 → `sdlc-implement`　测试 → `sdlc-test`　排查 → `sdlc-debug`
 - 边界清晰 ≤3 天可自动决策 → `sdlc-solo`　固化项目流程 / 工具编排 → `sdlc-flow`

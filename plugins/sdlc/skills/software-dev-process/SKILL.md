@@ -17,7 +17,7 @@ description: SDLC 路由：用户要求按本仓流程推进但阶段不清时�
 
 | 触发 | skill | 何时 |
 |---|---|---|
-| 安装 / 初始化 | `sdlc-setup` | 全局装 skills+hooks、为项目建生命周期状态 |
+| 项目初始化 | `sdlc-setup` | 为当前项目建生命周期状态 |
 | 流程答疑 / 讲解 | `sdlc-ask` | 「现在该做什么 / 为什么被拦 / 某 skill 怎么用」 |
 | 需求 / 设计 / 待确认 | `sdlc-design` | 需求理解、概要/详细设计 |
 | 写代码 | `sdlc-implement` | 在施工边界内编码 + 留痕 |

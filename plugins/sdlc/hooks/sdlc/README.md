@@ -13,8 +13,9 @@ platform hook payload
   -> docs/_sdlc/current.json + task artifacts
 ```
 
-Install this repository once as a user-level plugin/runtime. The plugin root
-contains the platform entries and this runtime:
+Install the marketplace repository once, then install the `sdlc` plugin from the
+`yuki` marketplace. In source form, the plugin root is `plugins/sdlc/`; after
+installation, the plugin cache contains the same platform entries and runtime:
 
 ```text
 .codex-plugin/plugin.json
@@ -38,9 +39,10 @@ node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs status
 ```
 
 `<RUNTIME_ROOT>` self-resolves from the runtime's own on-disk location (dev repo /
-global `~/.claude` / plugin dir), so hook messages, `help`, and `status.runtimeRoot`
-all emit the resolved absolute path. For self-use install and wiring, run the
-`sdlc-setup` skill.
+installed plugin cache / plugin dir), so hook messages, `help`, and
+`status.runtimeRoot` all emit the resolved absolute path. Use the `sdlc-setup`
+skill only to initialize project-level lifecycle state after the plugin is
+installed.
 
 ## State Contract
 
@@ -135,7 +137,7 @@ Minimal shape:
       "id": "T-01",
       "status": "done",
       "allowedPaths": ["src/login.ts", "README.md"],
-    "verification": ["npm test"]
+      "verification": ["npm test"]
     }
   ]
 }

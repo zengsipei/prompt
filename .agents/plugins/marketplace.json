@@ -1,0 +1,20 @@
+{
+  "name": "yuki",
+  "interface": {
+    "displayName": "yuki"
+  },
+  "plugins": [
+    {
+      "name": "sdlc",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sdlc"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

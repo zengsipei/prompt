@@ -70,7 +70,7 @@ export function sessionContextMessage(state) {
   if (!state) {
     lines.push(
       "SDLC 生命周期尚未初始化（无 docs/_sdlc/current.json）。",
-      "首次用本项目 SDLC → `/sdlc-setup` 初始化（装 skills/hooks + 建项目状态）；想先弄懂流程或怎么手动用 skill → `/sdlc-ask`。",
+      "首次用当前项目 SDLC → `/sdlc-setup` 初始化项目状态；想先弄懂流程或怎么手动用 skill → `/sdlc-ask`。",
     );
   } else {
     lines.push(

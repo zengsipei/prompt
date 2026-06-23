@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "sdlc",
-      "source": "./",
+      "source": "./plugins/sdlc",
       "description": "Hooks-first SDLC workflow runtime for AI-assisted software development."
     }
   ]

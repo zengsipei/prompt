@@ -1,0 +1,7 @@
+interface:
+  display_name: "sdlc-setup"
+  short_description: "初始化当前项目的 SDLC 生命周期状态"
+  default_prompt: "Use $sdlc-setup to initialize SDLC lifecycle state for this project. The sdlc plugin should already be installed from the marketplace."
+
+policy:
+  allow_implicit_invocation: true
