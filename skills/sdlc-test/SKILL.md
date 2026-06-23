@@ -1,6 +1,6 @@
 ---
 name: sdlc-test
-description: SDLC 测试阶段——验证本次改动的风险面。用户提到 sdlc-test 或要验证/测试本次改动时使用。共享语义见 software-dev-process。
+description: SDLC 测试：用户要验证或测试本次改动风险面时使用。
 ---
 
 # sdlc-test

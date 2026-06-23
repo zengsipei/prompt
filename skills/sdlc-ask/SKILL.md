@@ -1,6 +1,6 @@
 ---
 name: sdlc-ask
-description: 讲解本项目 SDLC 流程、答疑、指导如何手动使用各 skill。用户问「现在该做什么 / 为什么被拦 / 这个阶段要产出什么 / 某 skill 怎么用 / profile 是什么」等流程问题时使用。只讲解与引导，不改任何状态、不执行有门禁的动作。
+description: SDLC 答疑：用户问下一步、拦截原因、阶段产物、skill 用法或 profile 时使用；只读。
 ---
 
 # sdlc-ask

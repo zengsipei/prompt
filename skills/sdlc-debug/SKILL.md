@@ -1,6 +1,6 @@
 ---
 name: sdlc-debug
-description: SDLC 排查阶段——复现、定位、修复、回归。用户提到 sdlc-debug，或报告 bug / 报错 / 行为异常时使用。共享语义见 software-dev-process。
+description: SDLC 排查：用户报告 bug、报错或行为异常时使用。
 ---
 
 # sdlc-debug

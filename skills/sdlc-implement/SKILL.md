@@ -1,6 +1,6 @@
 ---
 name: sdlc-implement
-description: SDLC 施工阶段——在已声明的施工边界内写代码并留痕。用户提到 sdlc-implement 或要开始编码/施工时使用。共享语义见 software-dev-process。
+description: SDLC 施工：用户要开始编码或在已声明施工边界内改代码时使用。
 ---
 
 # sdlc-implement

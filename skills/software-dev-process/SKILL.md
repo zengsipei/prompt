@@ -1,6 +1,6 @@
 ---
 name: software-dev-process
-description: 仓库级 SDLC 的路由。用户提到 sdlc-design / sdlc-implement / sdlc-test / sdlc-debug / sdlc-solo / sdlc-flow / sdlc-setup / sdlc-ask，或要求按本仓 SDLC 推进、但不确定进哪个阶段时使用。流程讲解与答疑见 sdlc-ask。
+description: SDLC 路由：用户要求按本仓流程推进但阶段不清时使用。
 ---
 
 # Software Development Process（路由）

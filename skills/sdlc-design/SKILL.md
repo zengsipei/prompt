@@ -1,6 +1,6 @@
 ---
 name: sdlc-design
-description: SDLC 设计阶段——需求理解、概要/详细设计、待确认文档。用户提到 sdlc-design 或要进入设计/出方案时使用。共享语义见 software-dev-process。
+description: SDLC 设计：用户要理解需求、出方案、概要/详细设计或处理待确认时使用。
 ---
 
 # sdlc-design

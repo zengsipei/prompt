@@ -1,6 +1,6 @@
 ---
 name: sdlc-flow
-description: 把项目的口语化流程沉淀为可查看可复用的工具编排 registry。用户说「当前项目先 X 再 Y」「X 前必须用 Z」「定位代码用 codegraph」这类流程/工具约定，或要固化、查看项目 SDLC 流程时使用。
+description: SDLC registry：用户要固化或查看项目流程/工具约定时使用，如「X 前必须 Y」「定位代码用 codegraph」。
 ---
 
 # sdlc-flow

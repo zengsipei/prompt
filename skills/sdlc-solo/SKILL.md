@@ -1,6 +1,7 @@
 ---
 name: sdlc-solo
-description: SDLC 单人快速模式——边界清晰、预计 ≤3 天的小任务，AI 可自动决策。用户提到 sdlc-solo 时使用。共享语义见 software-dev-process。
+description: 手动 SDLC solo 模式：边界清晰、预计 ≤3 天的小任务，AI 可自动决策。
+disable-model-invocation: true
 ---
 
 # sdlc-solo

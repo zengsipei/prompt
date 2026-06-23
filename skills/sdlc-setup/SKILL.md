@@ -1,6 +1,7 @@
 ---
 name: sdlc-setup
-description: 初始化 / 安装本项目 SDLC——全局装 skills + hooks（Claude 与 Codex 双端）与/或为当前项目建生命周期状态。用户提到 sdlc-setup、要安装/配置/初始化这套 SDLC、首次在某项目启用本流程时使用。幂等，可重跑。
+description: 手动安装/初始化本项目 SDLC：全局 skills+hooks 与项目生命周期状态；幂等。
+disable-model-invocation: true
 ---
 
 # sdlc-setup
