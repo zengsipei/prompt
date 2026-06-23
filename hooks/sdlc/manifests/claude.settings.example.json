@@ -43,6 +43,39 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node <RUNTIME_ROOT>/hooks/sdlc/bin/claude-hook.mjs UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node <RUNTIME_ROOT>/hooks/sdlc/bin/claude-hook.mjs PreCompact"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node <RUNTIME_ROOT>/hooks/sdlc/bin/claude-hook.mjs PostCompact"
+          }
+        ]
+      }
     ]
   }
 }

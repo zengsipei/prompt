@@ -137,7 +137,9 @@ export function saveHookState(state, data, root = workspaceRoot()) {
   if (!filePath) {
     return;
   }
+  const previous = readJsonIfExists(filePath, {});
   writeJson(filePath, {
+    ...previous,
     updatedAt: new Date().toISOString(),
     ...data,
   });
@@ -147,6 +149,7 @@ export function recordEvent(event, result, root = workspaceRoot()) {
   appendNdjson(eventsPath(root), {
     at: new Date().toISOString(),
     event: event.name,
+    rawEventName: event.rawEventName,
     platform: event.platform,
     action: event.action,
     toolName: event.toolName,

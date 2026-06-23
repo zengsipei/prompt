@@ -118,11 +118,12 @@
     },
     {
       "internal": "prompt.submit",
-      "enabled": false,
-      "implemented": false,
-      "status": "roadmap",
+      "enabled": true,
+      "implemented": true,
+      "status": "enabled",
       "blocking": false,
-      "purpose": "Reserved for future prompt-time lifecycle hints before the agent starts tool work.",
+      "purpose": "Inject soft SDLC guidance and active lifecycle context before the agent starts tool work.",
+      "statusMessage": "Loading SDLC prompt guidance",
       "platforms": {
         "codex": {
           "pluginEvent": "UserPromptSubmit",
@@ -139,11 +140,110 @@
           }
         }
       }
+    },
+    {
+      "internal": "compact.before",
+      "enabled": true,
+      "implemented": true,
+      "status": "enabled",
+      "blocking": false,
+      "purpose": "Save a compact SDLC runtime summary before context compaction.",
+      "statusMessage": "Saving SDLC compact summary",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "PreCompact",
+          "manualEvent": "preCompact",
+          "matcher": {
+            "strategy": "all"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "PreCompact",
+          "manualEvent": "PreCompact",
+          "matcher": {
+            "strategy": "all"
+          }
+        }
+      }
+    },
+    {
+      "internal": "compact.after",
+      "enabled": true,
+      "implemented": true,
+      "status": "enabled",
+      "blocking": false,
+      "purpose": "Re-inject the saved SDLC runtime summary after context compaction.",
+      "statusMessage": "Restoring SDLC compact summary",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "PostCompact",
+          "manualEvent": "postCompact",
+          "matcher": {
+            "strategy": "all"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "PostCompact",
+          "manualEvent": "PostCompact",
+          "matcher": {
+            "strategy": "all"
+          }
+        }
+      }
+    },
+    {
+      "internal": "subagent.start",
+      "enabled": false,
+      "implemented": false,
+      "status": "roadmap",
+      "blocking": false,
+      "purpose": "Roadmap placeholder for future subagent lifecycle observability; disabled in this slice.",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "SubagentStart",
+          "manualEvent": "subagentStart",
+          "matcher": {
+            "strategy": "all"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "SubagentStart",
+          "manualEvent": "SubagentStart",
+          "matcher": {
+            "strategy": "all"
+          }
+        }
+      }
+    },
+    {
+      "internal": "subagent.stop",
+      "enabled": false,
+      "implemented": false,
+      "status": "roadmap",
+      "blocking": false,
+      "purpose": "Roadmap placeholder for future subagent lifecycle observability; disabled in this slice.",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "SubagentStop",
+          "manualEvent": "subagentStop",
+          "matcher": {
+            "strategy": "all"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "SubagentStop",
+          "manualEvent": "SubagentStop",
+          "matcher": {
+            "strategy": "all"
+          }
+        }
+      }
     }
   ],
   "stateFiles": {
     "current": "docs/_sdlc/current.json",
     "events": "docs/_sdlc/hook-events.ndjson",
-    "taskState": "docs/[task-dir]/onlyAI/hook-state.json"
+    "taskState": "docs/[task-dir]/onlyAI/hook-state.json",
+    "compactSummary": "docs/[task-dir]/onlyAI/hook-state.json#compactSummary"
   }
 }

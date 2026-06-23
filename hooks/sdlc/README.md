@@ -109,6 +109,16 @@ Phases are `design / implement / test / debug` (former design-1/design-2 are mer
 Use `recommendedReads` before searching broadly. Use `allowedPaths` to avoid
 guessing the current implementation boundary.
 
+Prompt and compact hooks are advisory continuity hooks, not gates:
+
+- `UserPromptSubmit` injects soft SDLC guidance and records the event for debugging.
+- `PreCompact` saves `compactSummary` in `docs/[task-dir]/onlyAI/hook-state.json`.
+- `PostCompact` re-injects the saved summary after compaction.
+
+The compact summary includes the active task, phase, unmet preconditions, and
+satisfied lifecycle capabilities. These hooks must not create PRDs, handoffs, or
+task artifacts; hard enforcement remains in tool and stop hooks.
+
 ## Machine-readable Task Plan
 
 When present, `docs/[task-dir]/onlyAI/task-plan.json` is the preferred source

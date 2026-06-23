@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 import { runClaudeCodeHook } from "../adapters/claude-code.mjs";
+import { hookFailureJson, printJson } from "../core/result.mjs";
 
 runClaudeCodeHook().catch((error) => {
-  process.stdout.write(
-    `${JSON.stringify({
-      decision: "deny",
-      reason: `SDLC Claude Code hook failed: ${error.message}`,
-    })}\n`,
-  );
+  printJson(hookFailureJson(error, process.argv[2], "SDLC Claude Code"));
 });

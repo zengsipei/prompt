@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { gateLevel, loadCurrentState, recordEvent, saveHookState, workspaceRoot } from "./context.mjs";
+import { gateLevel, loadCurrentState, loadHookState, recordEvent, saveHookState, workspaceRoot } from "./context.mjs";
 import {
   implementationAllowedPaths,
+  loadTaskPlan,
   isAllowedImplementationPath,
   isLifecyclePath,
   pendingConfirmations,
@@ -96,11 +97,22 @@ export function evaluate(event, options = {}) {
         additionalContext: sessionContextMessage(state),
       });
       break;
+    case "prompt.submit":
+      result = allow("Injected soft SDLC prompt guidance.", {
+        additionalContext: promptGuidanceMessage(state, root),
+      });
+      break;
     case "tool.before":
       result = evaluateBeforeTool(normalizedEvent, state, root);
       break;
     case "tool.after":
       result = allow("Recorded SDLC hook event.");
+      break;
+    case "compact.before":
+      result = evaluatePreCompact(state, root);
+      break;
+    case "compact.after":
+      result = evaluatePostCompact(state, root);
       break;
     case "session.stop":
       result = evaluateStop(normalizedEvent, state, root, options);
@@ -147,6 +159,10 @@ export function evaluate(event, options = {}) {
 }
 
 function shouldRecordEvent(event, state) {
+  if (event.name === "prompt.submit" || event.name === "compact.before" || event.name === "compact.after") {
+    return true;
+  }
+
   if (event.name !== "session.start") {
     return true;
   }
@@ -260,6 +276,162 @@ function evaluateBeforeTool(event, state, root) {
 
   // test / debug 阶段：放行源码编辑（验证与修复需要）。
   return allow("SDLC lifecycle checks passed.");
+}
+
+export function promptGuidanceMessage(state, root = workspaceRoot()) {
+  if (!state) {
+    return [
+      "SDLC prompt guidance: lifecycle is not initialized.",
+      "If this turn starts implementation work, initialize with `/sdlc-setup` or `sdlc-hook init`; otherwise continue normally.",
+      "This prompt hook is advisory only and never blocks user prompts.",
+    ].join("\n");
+  }
+
+  const summary = sdlcRuntimeSummary(state, root);
+  const lines = [
+    "SDLC prompt guidance (advisory, never a hard gate):",
+    `- Active task: ${summary.activeTaskDir || "unset"}`,
+    `- Phase: ${summary.phase || "unset"}`,
+  ];
+
+  if (summary.unmetPreconditions.length > 0) {
+    lines.push(`- Unmet preconditions: ${summary.unmetPreconditions.join("; ")}`);
+  } else {
+    lines.push("- Unmet preconditions: none detected");
+  }
+
+  if (summary.satisfiedCapabilities.length > 0) {
+    lines.push(`- Satisfied capabilities: ${summary.satisfiedCapabilities.join(", ")}`);
+  }
+
+  lines.push("Use this as context continuity only; tool and stop hooks remain responsible for hard enforcement.");
+  return lines.join("\n");
+}
+
+function evaluatePreCompact(state, root) {
+  if (!state) {
+    return allow("No active SDLC lifecycle state to summarize for compaction.");
+  }
+
+  const summary = sdlcRuntimeSummary(state, root);
+  saveHookState(state, { compactSummary: summary }, root);
+
+  return allow("Saved SDLC runtime summary for compaction.", {
+    additionalContext: compactSummaryMessage(summary),
+  });
+}
+
+function evaluatePostCompact(state, root) {
+  if (!state) {
+    return allow("No active SDLC lifecycle state after compaction.");
+  }
+
+  const hookState = loadHookState(state, root);
+  const summary = isRuntimeSummary(hookState.compactSummary)
+    ? hookState.compactSummary
+    : sdlcRuntimeSummary(state, root);
+
+  return allow("Restored SDLC runtime summary after compaction.", {
+    additionalContext: compactSummaryMessage(summary),
+  });
+}
+
+export function sdlcRuntimeSummary(state, root = workspaceRoot()) {
+  const completion = phaseCompletion(state, root);
+  const pending = pendingConfirmations(state, root);
+  const unmet = phasePreconditionsUnmet(state, root, state?.phase);
+  const allowed = state ? implementationAllowedPaths(state, root) : new Set();
+  const taskPlan = loadTaskPlan(state, root);
+  const taskCount = Array.isArray(taskPlan?.tasks) ? taskPlan.tasks.length : 0;
+  const completedTaskCount = Array.isArray(taskPlan?.tasks)
+    ? taskPlan.tasks.filter((task) => {
+        const status = String(task?.status || "").trim().toLowerCase();
+        return ["done", "completed", "complete", "[x]", "已完成"].includes(status);
+      }).length
+    : 0;
+
+  const unmetPreconditions = [];
+  if (pending.length > 0) {
+    unmetPreconditions.push(`pending confirmations: ${pending.map((item) => item.name).join(", ")}`);
+  }
+  for (const item of unmet) {
+    unmetPreconditions.push(phasePreconditionEvidenceLabel(item));
+  }
+
+  return {
+    savedAt: new Date().toISOString(),
+    activeTaskDir: state?.activeTaskDir || null,
+    phase: state?.phase || null,
+    profile: sdlcProfile(state),
+    mode: state?.mode || null,
+    unmetPreconditions,
+    satisfiedCapabilities: satisfiedCapabilities(state, {
+      completion,
+      allowed,
+      taskPlan,
+      taskCount,
+      completedTaskCount,
+    }),
+    completion,
+    taskProgress: {
+      total: taskCount,
+      completed: completedTaskCount,
+    },
+  };
+}
+
+function satisfiedCapabilities(state, context) {
+  const values = [];
+  if (!state) {
+    return values;
+  }
+
+  values.push("lifecycle-state");
+
+  if (context.taskPlan) {
+    values.push("machine-readable-task-plan");
+  }
+
+  if (context.allowed.size > 0) {
+    values.push("implementation-boundary");
+  }
+
+  if (context.completion?.design) {
+    values.push("design-complete");
+  }
+
+  if (context.completion?.implement) {
+    values.push("implementation-complete");
+  }
+
+  if (context.completion?.test) {
+    values.push("verification-complete");
+  }
+
+  return values;
+}
+
+function compactSummaryMessage(summary) {
+  const unmet = summary.unmetPreconditions?.length
+    ? summary.unmetPreconditions.join("; ")
+    : "none detected";
+  const capabilities = summary.satisfiedCapabilities?.length
+    ? summary.satisfiedCapabilities.join(", ")
+    : "none";
+
+  return [
+    "SDLC compact runtime summary:",
+    `- Active task: ${summary.activeTaskDir || "unset"}`,
+    `- Phase: ${summary.phase || "unset"}`,
+    `- Profile: ${summary.profile || "standard"}`,
+    `- Unmet preconditions: ${unmet}`,
+    `- Satisfied capabilities: ${capabilities}`,
+    `- Task progress: ${summary.taskProgress?.completed || 0}/${summary.taskProgress?.total || 0}`,
+  ].join("\n");
+}
+
+function isRuntimeSummary(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && "activeTaskDir" in value);
 }
 
 function evaluateCommand(event, state, profile) {

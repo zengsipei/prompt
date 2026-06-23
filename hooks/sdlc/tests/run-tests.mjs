@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { evaluate } from "../core/rules.mjs";
-import { allow, asCodexHookJson, asHookJson, codexHookFailureJson } from "../core/result.mjs";
-import { eventsPath, writeJson } from "../core/context.mjs";
+import { allow, asCodexHookJson, asHookJson, codexHookFailureJson, hookFailureJson } from "../core/result.mjs";
+import { eventsPath, hookStatePath, readJsonIfExists, writeJson } from "../core/context.mjs";
 import {
   implementationAllowedPaths,
   inferAllowedPathsFromGit,
@@ -20,6 +20,8 @@ import {
   generatedHookArtifacts,
   readHookManifest,
 } from "../core/hook-config-generator.mjs";
+import { normalizeCodexEventName } from "../adapters/codex.mjs";
+import { normalizeClaudeCodeEventName } from "../adapters/claude-code.mjs";
 
 function makeWorkspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-hooks-"));
@@ -73,7 +75,13 @@ function run() {
     const generated = generatedHookArtifacts(readHookManifest(RUNTIME_ROOT));
     assert.ok(generated.has("hooks/codex-hooks.json"));
     assert.ok(generated.has("hooks/claude-hooks.json"));
-    assert.ok(!generated.get("hooks/codex-hooks.json").includes("UserPromptSubmit"));
+    assert.ok(generated.get("hooks/codex-hooks.json").includes("UserPromptSubmit"));
+    assert.ok(generated.get("hooks/codex-hooks.json").includes("PreCompact"));
+    assert.ok(generated.get("hooks/codex-hooks.json").includes("PostCompact"));
+    assert.ok(!generated.get("hooks/codex-hooks.json").includes("SubagentStart"));
+    assert.ok(!generated.get("hooks/codex-hooks.json").includes("SubagentStop"));
+    assert.ok(!generated.get("hooks/claude-hooks.json").includes("SubagentStart"));
+    assert.ok(!generated.get("hooks/claude-hooks.json").includes("SubagentStop"));
   }
 
   // runtime 根解析：自解析落在真实运行时（含 CLI 入口，验证上溯路径正确）；override 生效；
@@ -96,11 +104,39 @@ function run() {
     assert.deepEqual(asHookJson(allowed, "PostToolUse"), { decision: "allow" });
     assert.deepEqual(asCodexHookJson(allowed, "PostToolUse"), {});
     assert.deepEqual(asCodexHookJson(allowed, "PreToolUse"), { decision: "allow" });
+    assert.deepEqual(asCodexHookJson(allow("ok", { additionalContext: "ctx" }), "UserPromptSubmit"), {
+      decision: "allow",
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext: "ctx",
+      },
+    });
     assert.deepEqual(codexHookFailureJson(new Error("boom"), "PostToolUse"), {});
     assert.deepEqual(codexHookFailureJson(new Error("boom"), "PreToolUse"), {
       decision: "deny",
       reason: "SDLC Codex hook failed: boom",
     });
+    assert.deepEqual(codexHookFailureJson(new Error("boom"), "UserPromptSubmit"), {});
+    assert.deepEqual(hookFailureJson(new Error("boom"), "UserPromptSubmit", "SDLC Claude Code"), {
+      decision: "allow",
+      reason: "SDLC Claude Code hook failed without blocking: boom",
+    });
+    assert.deepEqual(hookFailureJson(new Error("boom"), "PreCompact", "SDLC Claude Code"), {
+      decision: "allow",
+      reason: "SDLC Claude Code hook failed without blocking: boom",
+    });
+  }
+
+  // 平台事件名归一化：prompt / compact 进入中性内部事件。
+  {
+    assert.equal(normalizeCodexEventName("UserPromptSubmit"), "prompt.submit");
+    assert.equal(normalizeCodexEventName("preCompact"), "compact.before");
+    assert.equal(normalizeCodexEventName("postCompact"), "compact.after");
+    assert.equal(normalizeCodexEventName("unknown", { hookEventName: "PreCompact" }), "compact.before");
+    assert.equal(normalizeClaudeCodeEventName("UserPromptSubmit"), "prompt.submit");
+    assert.equal(normalizeClaudeCodeEventName("PreCompact"), "compact.before");
+    assert.equal(normalizeClaudeCodeEventName("PostCompact"), "compact.after");
+    assert.equal(normalizeClaudeCodeEventName("unknown", { hook_event_name: "PostCompact" }), "compact.after");
   }
 
   // session.start 默认不记事件。
@@ -110,6 +146,62 @@ function run() {
     const result = evaluate({ name: "session.start", platform: "test" }, { cwd: root });
     assert.equal(result.decision, "allow");
     assert.equal(readEvents(root), "");
+  }
+
+  // prompt.submit：只注入软指导并留痕，不阻断用户 prompt。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "pending", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const result = evaluate({ name: "prompt.submit", platform: "test", rawEventName: "UserPromptSubmit" }, { cwd: root });
+    assert.equal(result.decision, "allow");
+    assert.match(result.additionalContext, /advisory/u);
+    assert.match(readEvents(root), /"event":"prompt.submit"/u);
+  }
+
+  // compact.before / compact.after：保存并恢复短运行时摘要，且 prompt/compact 事件只写 debug 留痕。
+  {
+    const root = makeWorkspace();
+    const state = seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-evidence",
+            evidence: { type: "file", path: "onlyAI/locate-code.md" },
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const saved = evaluate({ name: "compact.before", platform: "test", rawEventName: "PreCompact" }, { cwd: root });
+    assert.equal(saved.decision, "allow");
+    assert.match(saved.additionalContext, /SDLC compact runtime summary/u);
+
+    const hookState = readJsonIfExists(hookStatePath(state, root), {});
+    assert.equal(hookState.compactSummary.activeTaskDir, "docs/login-fix");
+    assert.equal(hookState.compactSummary.phase, "implement");
+    assert.deepEqual(hookState.compactSummary.unmetPreconditions, ["file evidence onlyAI/locate-code.md"]);
+    assert.ok(hookState.compactSummary.satisfiedCapabilities.includes("lifecycle-state"));
+    assert.ok(hookState.compactSummary.satisfiedCapabilities.includes("machine-readable-task-plan"));
+    assert.ok(hookState.compactSummary.satisfiedCapabilities.includes("implementation-boundary"));
+
+    const restored = evaluate({ name: "compact.after", platform: "test", rawEventName: "PostCompact" }, { cwd: root });
+    assert.equal(restored.decision, "allow");
+    assert.match(restored.additionalContext, /file evidence onlyAI\/locate-code.md/u);
+
+    const events = readEvents(root);
+    assert.match(events, /"event":"compact.before"/u);
+    assert.match(events, /"event":"compact.after"/u);
+    assert.equal(fs.existsSync(path.join(root, "docs", "login-fix", "001-概要设计.md")), false);
+    assert.equal(fs.existsSync(path.join(root, "docs", "login-fix", "summary.md")), false);
   }
 
   // 红线：恒 block，优先于一切（无 state 也拦）。

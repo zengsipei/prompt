@@ -7,6 +7,8 @@ export function allow(message = "SDLC hook allowed.", extra = {}) {
   };
 }
 
+const NON_BLOCKING_FAILURE_EVENTS = new Set(["userpromptsubmit", "precompact", "postcompact"]);
+
 export function warn(message, extra = {}) {
   return {
     decision: "allow",
@@ -63,7 +65,7 @@ export function asCodexHookJson(result, eventName) {
 }
 
 export function codexHookFailureJson(error, eventName, label = "Codex") {
-  if (isCodexPostToolUse(eventName)) {
+  if (isCodexNonBlockingFailureEvent(eventName)) {
     return {};
   }
 
@@ -73,8 +75,30 @@ export function codexHookFailureJson(error, eventName, label = "Codex") {
   };
 }
 
+export function hookFailureJson(error, eventName, label = "SDLC") {
+  if (isNonBlockingFailureEvent(eventName)) {
+    return {
+      decision: "allow",
+      reason: `${label} hook failed without blocking: ${error.message}`,
+    };
+  }
+
+  return {
+    decision: "deny",
+    reason: `${label} hook failed: ${error.message}`,
+  };
+}
+
+function isCodexNonBlockingFailureEvent(eventName) {
+  return isNonBlockingFailureEvent(eventName) || isCodexPostToolUse(eventName);
+}
+
 function isCodexPostToolUse(eventName) {
   return String(eventName || "").toLowerCase() === "posttooluse";
+}
+
+function isNonBlockingFailureEvent(eventName) {
+  return NON_BLOCKING_FAILURE_EVENTS.has(String(eventName || "").toLowerCase());
 }
 
 export function printJson(value) {

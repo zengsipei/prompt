@@ -4,7 +4,7 @@
 # Replace <RUNTIME_ROOT> with the absolute path to the user-level runtime.
 # Projects do not need to copy hooks/sdlc; they only store docs/_sdlc state.
 #
-# Codex event names used here: sessionStart, preToolUse, postToolUse, stop.
+# Codex event names used here: sessionStart, preToolUse, postToolUse, stop, userPromptSubmit, preCompact, postCompact.
 
 [hooks]
 sessionStart = [
@@ -18,4 +18,13 @@ postToolUse = [
 ]
 stop = [
   { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs stop" }
+]
+userPromptSubmit = [
+  { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs userPromptSubmit" }
+]
+preCompact = [
+  { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs preCompact" }
+]
+postCompact = [
+  { command = "node <RUNTIME_ROOT>/hooks/sdlc/bin/codex-hook.mjs postCompact" }
 ]

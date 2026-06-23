@@ -45,6 +45,42 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc/bin/plugin-hook.mjs\" UserPromptSubmit",
+            "statusMessage": "Loading SDLC prompt guidance"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc/bin/plugin-hook.mjs\" PreCompact",
+            "statusMessage": "Saving SDLC compact summary"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc/bin/plugin-hook.mjs\" PostCompact",
+            "statusMessage": "Restoring SDLC compact summary"
+          }
+        ]
+      }
     ]
   }
 }
