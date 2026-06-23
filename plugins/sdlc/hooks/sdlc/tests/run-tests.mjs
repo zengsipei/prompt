@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { evaluate } from "../core/rules.mjs";
-import { allow, asCodexHookJson, asHookJson, codexHookFailureJson, hookFailureJson } from "../core/result.mjs";
+import { allow, asCodexHookJson, asHookJson, block, codexHookFailureJson, hookFailureJson, warn } from "../core/result.mjs";
 import { eventsPath, hookStatePath, readJsonIfExists, writeJson } from "../core/context.mjs";
 import {
   implementationAllowedPaths,
@@ -21,7 +21,7 @@ import {
   readHookManifest,
 } from "../core/hook-config-generator.mjs";
 import { normalizeCodexEventName } from "../adapters/codex.mjs";
-import { normalizeClaudeCodeEventName } from "../adapters/claude-code.mjs";
+import { asClaudeHookJson, normalizeClaudeCodeEventName } from "../adapters/claude-code.mjs";
 
 function makeWorkspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-hooks-"));
@@ -125,6 +125,38 @@ function run() {
       decision: "allow",
       reason: "SDLC Claude Code hook failed without blocking: boom",
     });
+  }
+
+  // Claude 适配层分事件合同（asClaudeHookJson）：PreToolUse 用嵌套 permissionDecision；Stop 用 top-level block；
+  // 注入事件用 hookSpecificOutput.additionalContext；allow 不强批（空对象/仅 systemMessage）。见 docs/adr/0002。
+  {
+    // PreToolUse block → 嵌套 permissionDecision: deny（不是 top-level deny，否则 Claude 忽略、拦不住）。
+    assert.deepEqual(asClaudeHookJson(block("待确认未处理"), "PreToolUse"), {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "待确认未处理",
+      },
+    });
+    // PreToolUse allow → 空对象（绝不发 permissionDecision:"allow"，否则强批绕过用户权限系统）。
+    assert.deepEqual(asClaudeHookJson(allow("ok"), "PreToolUse"), {});
+    // PreToolUse warn → systemMessage 软提示，不阻断。
+    assert.deepEqual(asClaudeHookJson(warn("设计期改源码"), "PreToolUse"), { systemMessage: "设计期改源码" });
+    // SessionStart 注入 → hookSpecificOutput.additionalContext（无 top-level decision）。
+    assert.deepEqual(asClaudeHookJson(allow("ok", { additionalContext: "ctx" }), "SessionStart"), {
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "ctx" },
+    });
+    // 未初始化 SessionStart（allow 无 ctx）→ 空对象，静默。
+    assert.deepEqual(asClaudeHookJson(allow("inactive"), "SessionStart"), {});
+    // UserPromptSubmit 注入 → additionalContext。
+    assert.deepEqual(asClaudeHookJson(allow("ok", { additionalContext: "guide" }), "UserPromptSubmit"), {
+      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "guide" },
+    });
+    // Stop block → top-level decision: block（Stop / PostToolUse 仍以 top-level 为当前格式）。
+    assert.deepEqual(asClaudeHookJson(block("阶段未完成"), "Stop"), { decision: "block", reason: "阶段未完成" });
+    // Stop warn → systemMessage；PostToolUse allow → 空对象。
+    assert.deepEqual(asClaudeHookJson(warn("阶段未完成"), "Stop"), { systemMessage: "阶段未完成" });
+    assert.deepEqual(asClaudeHookJson(allow("recorded"), "PostToolUse"), {});
   }
 
   // 平台事件名归一化：prompt / compact 进入中性内部事件。
