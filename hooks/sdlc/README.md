@@ -154,7 +154,7 @@ platform.
 
 1. 内置红线（恒 block，最高优先级）：删 `package.json`/`tsconfig.json`、SQL `DROP`/`ALTER COLUMN`、`git push` 主分支。见 `core/redlines.mjs`。
 2. 待确认文档未处理：冻结源码编辑。
-3. 项目声明的前置门禁：`registry.phasePreconditions[phase]` 要求的产物缺失时，冻结该阶段源码编辑。
+3. 项目声明的前置门禁：`registry.phasePreconditions[phase]` 声明的 required-evidence 文件证据缺失或去除空白后为空时，冻结该阶段源码编辑。
 4. 施工边界 `allowedPaths`（implement）：越界编辑按 profile block；**未声明任何边界时退化为 warn**。
 
 软（warn + 留痕，按 profile 分档，见 `core/context.mjs` 的 `GATE_MATRIX`）：
@@ -173,11 +173,18 @@ platform.
 {
   "steps": { "locate-code": { "tools": [{ "name": "codegraph" }, { "name": "grep/glob/read", "note": "降级" }] } },
   "phasePreconditions": {
-    "implement": [{ "step": "locate-code", "requireArtifact": "onlyAI/locate-code.md", "reason": "codegraph 检索待修改部分" }]
+    "implement": [
+      {
+        "step": "locate-code",
+        "enforcement": "required-evidence",
+        "evidence": { "type": "file", "path": "onlyAI/locate-code.md" },
+        "reason": "codegraph 检索待修改部分"
+      }
+    ]
   }
 }
 ```
 
 工具「选哪个」是软推荐（registry + 降级）；「这一步必须发生」可被项目声明为硬前置门禁
-（`requireArtifact` 存在与否，由 hook 在该阶段源码编辑处硬拦）。用 `sdlc-flow` skill
+（当前支持 `required-evidence` 文件证据；文件路径相对当前任务目录，且必须存在并有非空白内容）。用 `sdlc-flow` skill
 把口语流程沉淀进项目 registry，用 `registry show` 回看。

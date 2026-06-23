@@ -190,13 +190,20 @@ function run() {
     assert.match(result.reason, /待确认/u);
   }
 
-  // 项目声明的硬前置门禁：缺产物 → block；补齐 → 放行。
+  // 项目声明的 required-evidence 文件门禁：缺失/空白 → block 源码；生命周期文档仍放行；非空 → 放行。
   {
     const root = makeWorkspace();
     seedCurrent(root, { phase: "implement", profile: "standard" });
     writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
       phasePreconditions: {
-        implement: [{ step: "locate-code", requireArtifact: "onlyAI/locate-code.md", reason: "codegraph 检索待修改部分" }],
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-evidence",
+            evidence: { type: "file", path: "onlyAI/locate-code.md" },
+            reason: "codegraph 检索待修改部分",
+          },
+        ],
       },
     });
     writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
@@ -210,7 +217,15 @@ function run() {
     assert.equal(blocked.decision, "deny");
     assert.match(blocked.reason, /前置门禁/u);
 
+    const lifecycleEdit = evaluate(event({ targetPaths: ["docs/login-fix/003-文件改动记录.md"] }), { cwd: root });
+    assert.equal(lifecycleEdit.decision, "allow");
+
+    write(path.join(root, "docs", "login-fix", "onlyAI", "locate-code.md"), "   \n\t");
+    const emptyEvidence = phasePreconditionsUnmet({ activeTaskDir: "docs/login-fix" }, root, "implement");
+    assert.equal(emptyEvidence.length, 1);
+
     write(path.join(root, "docs", "login-fix", "onlyAI", "locate-code.md"), "# codegraph 检索结果");
+    assert.equal(phasePreconditionsUnmet({ activeTaskDir: "docs/login-fix" }, root, "implement").length, 0);
     const allowed = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
     assert.equal(allowed.decision, "allow");
   }

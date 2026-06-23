@@ -20,7 +20,7 @@ sdlc-hook phase.set --phase implement
   sdlc-hook scope.infer   # 从 git diff 写入 task-plan.json
   ```
   也可在 `003-施工文档.md` 用反引号列出文件，或直接写进 `onlyAI/task-plan.json` 的 `allowedPaths`。改边界外文件会被硬拦（standard/full）；无声明时退化为只提示（lite/solo）。
-- **项目前置门禁**：若项目 registry 声明了 implement 前置（如「codegraph 检索待修改部分」），**必须先产出对应产物**，否则源码编辑被硬拦。`status` 的 `phasePreconditions` 列出未满足项。
+- **项目前置门禁**：若项目 registry 声明了 implement 前置（如「codegraph 检索待修改部分」），**必须先提供 required-evidence 证据**，否则源码编辑被硬拦。当前支持文件证据：路径相对当前任务目录，且文件必须存在并在去除空白后非空。`status` 的 `phasePreconditions` 列出未满足项。
 - **待确认**：有未处理待确认会硬拦——先回 `sdlc-design` 处理。
 
 ## 逐任务循环

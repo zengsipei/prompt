@@ -26,7 +26,7 @@ sdlc-hook status
 - **为什么被拦 / 报错？** → 对照拦截来源解释，并给满足条件的最短路径：
   - 红线（删核心配置 / SQL `DROP`·`ALTER COLUMN` / push 主分支）→ 恒拦，需用户显式确认改方案。
   - 待确认文档未处理 → 回 `sdlc-design` 把文档标「状态：已处理 / 决策状态：已决策」。
-  - 项目前置门禁未满足 → 先产出 `phasePreconditions` 要求的产物（如 codegraph 检索结果）。
+  - 项目前置门禁未满足 → 先提供 `phasePreconditions` 要求的 required-evidence 证据（当前支持相对任务目录的非空文件证据，如 codegraph 检索结果文件）。
   - 施工越界 → 把文件纳入 `allowedPaths`（`sdlc-implement` 里 `scope.infer` 自动播种）。
 - **某 skill 怎么用 / 进哪个？** → 见下「路由」；说明该 skill 何时用、产出什么。
 - **手动跑命令？** → 给展开后的 `sdlc-hook ...`；提醒仪式（phase.set）已吸收进阶段 skill，通常不必手敲。

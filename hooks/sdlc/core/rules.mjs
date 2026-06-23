@@ -8,6 +8,7 @@ import {
   isLifecyclePath,
   pendingConfirmations,
   phaseCompletion,
+  phasePreconditionEvidenceLabel,
   phasePreconditionsUnmet,
   sdlcProfile,
 } from "./artifacts.mjs";
@@ -217,7 +218,9 @@ function evaluateBeforeTool(event, state, root) {
     return block(
       [
         `当前阶段 ${state.phase} 有项目声明的前置门禁未满足：`,
-        ...unmet.map((item) => `- 需先产出 ${item.requireArtifact}${item.reason ? `（${item.reason}）` : ""}`),
+        ...unmet.map(
+          (item) => `- 需先提供 ${phasePreconditionEvidenceLabel(item)}${item.reason ? `（${item.reason}）` : ""}`,
+        ),
         "这是项目通过 registry 声明的硬约束，先完成前置动作再改源码。",
       ].join("\n"),
     );
@@ -300,7 +303,7 @@ function evaluatePhaseSet(event, state, root) {
   const unmet = phasePreconditionsUnmet(state, root, target);
   if (unmet.length > 0) {
     messages.push(
-      `注意：${target} 有项目前置门禁未满足：${unmet.map((item) => item.requireArtifact).join(", ")}（改源码时会被硬拦）。`,
+      `注意：${target} 有项目前置门禁未满足：${unmet.map(phasePreconditionEvidenceLabel).join(", ")}（改源码时会被硬拦）。`,
     );
   }
 

@@ -66,7 +66,7 @@ export function resolveStep(registry, name) {
   };
 }
 
-// 某阶段的项目声明硬前置门禁清单（每项可含 step / requireArtifact / reason）。
+// 某阶段的项目声明硬前置门禁清单（required-evidence schema；当前支持 file evidence）。
 export function registryPhasePreconditions(registry, phase) {
   const list = registry?.phasePreconditions?.[phase];
   return Array.isArray(list) ? list : [];

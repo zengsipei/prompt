@@ -285,18 +285,57 @@ export function inferAllowedPathsFromGit(root) {
   return paths;
 }
 
+export function phasePreconditionEvidenceLabel(precondition) {
+  if (precondition?.enforcement !== "required-evidence") {
+    return "unsupported precondition";
+  }
+
+  const evidence = precondition.evidence;
+  if (evidence?.type === "file" && typeof evidence.path === "string" && evidence.path.trim()) {
+    return `file evidence ${toPosixPath(evidence.path.trim())}`;
+  }
+
+  return "unsupported required evidence";
+}
+
+export function requiredEvidenceSatisfied(state, root, precondition) {
+  if (precondition?.enforcement !== "required-evidence") {
+    return true;
+  }
+
+  const evidence = precondition.evidence;
+  if (!evidence || evidence.type !== "file") {
+    return false;
+  }
+
+  const evidencePath = evidence.path;
+  if (typeof evidencePath !== "string" || !evidencePath.trim() || path.isAbsolute(evidencePath.trim())) {
+    return false;
+  }
+
+  const taskRoot = taskPath(state, root);
+  if (!taskRoot) {
+    return false;
+  }
+
+  const resolved = path.resolve(taskRoot, evidencePath.trim());
+  const relativeToTask = path.relative(taskRoot, resolved);
+  if (relativeToTask.startsWith("..") || path.isAbsolute(relativeToTask)) {
+    return false;
+  }
+
+  return fs.existsSync(resolved) && readTextIfExists(resolved).trim().length > 0;
+}
+
 // 项目声明的硬前置门禁（registry.phasePreconditions[phase]）中，尚未满足的项。
-// 前置以“某产物文件须存在”表达——复用 fileExists，无需新仪式（§8）。无 requireArtifact 的前置无法机器校验，跳过（留给 skill 软引导）。
+// 仅 `enforcement: "required-evidence"` 是机器可执行硬门禁；本 slice 支持非空文件证据。
 export function phasePreconditionsUnmet(state, root, phase) {
   if (!state?.activeTaskDir) {
     return [];
   }
 
   const registry = loadRegistry(root);
-  return registryPhasePreconditions(registry, phase).filter((pre) => {
-    if (!pre || typeof pre.requireArtifact !== "string" || !pre.requireArtifact.trim()) {
-      return false;
-    }
-    return !fileExists(taskPath(state, root, pre.requireArtifact.trim()));
-  });
+  return registryPhasePreconditions(registry, phase).filter(
+    (pre) => pre?.enforcement === "required-evidence" && !requiredEvidenceSatisfied(state, root, pre),
+  );
 }
