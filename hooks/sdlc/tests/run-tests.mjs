@@ -14,6 +14,12 @@ import {
 import { loadRegistry, resolveStep } from "../core/registry.mjs";
 import { statusPayload } from "../adapters/manual.mjs";
 import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
+import {
+  GENERATE_HOOK_CONFIGS_COMMAND,
+  checkGeneratedHookArtifacts,
+  generatedHookArtifacts,
+  readHookManifest,
+} from "../core/hook-config-generator.mjs";
 
 function makeWorkspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-hooks-"));
@@ -55,6 +61,21 @@ function event(extra) {
 }
 
 function run() {
+  // hook 配置生成物不得从中性 manifest 漂移。
+  {
+    const drift = checkGeneratedHookArtifacts(RUNTIME_ROOT);
+    assert.deepEqual(
+      drift,
+      [],
+      `Generated hook configs are out of date: ${drift.join(", ")}. Run: ${GENERATE_HOOK_CONFIGS_COMMAND}`,
+    );
+
+    const generated = generatedHookArtifacts(readHookManifest(RUNTIME_ROOT));
+    assert.ok(generated.has("hooks/codex-hooks.json"));
+    assert.ok(generated.has("hooks/claude-hooks.json"));
+    assert.ok(!generated.get("hooks/codex-hooks.json").includes("UserPromptSubmit"));
+  }
+
   // runtime 根解析：自解析落在真实运行时（含 CLI 入口，验证上溯路径正确）；override 生效；
   // hookCommand 给出可执行真实命令，不含未解析占位符。
   {
