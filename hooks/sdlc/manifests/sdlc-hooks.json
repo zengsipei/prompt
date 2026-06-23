@@ -1,34 +1,144 @@
 {
+  "$schema": "SDLC neutral hook event manifest v1. Run `node hooks/sdlc/bin/generate-hook-configs.mjs` after editing.",
   "name": "software-dev-process-sdlc-hooks",
   "version": 1,
+  "generatedArtifacts": {
+    "command": "node hooks/sdlc/bin/generate-hook-configs.mjs",
+    "files": [
+      "hooks/codex-hooks.json",
+      "hooks/claude-hooks.json",
+      "hooks/sdlc/manifests/codex.config.example.toml",
+      "hooks/sdlc/manifests/claude.settings.example.json"
+    ]
+  },
   "events": [
     {
       "internal": "session.start",
-      "codex": "sessionStart",
-      "claudeCode": "SessionStart",
+      "enabled": true,
+      "implemented": true,
+      "status": "enabled",
       "blocking": false,
-      "purpose": "Inject a short SDLC lifecycle reminder and active task summary."
+      "purpose": "Inject a short SDLC lifecycle reminder and active task summary.",
+      "statusMessage": "Loading SDLC lifecycle context",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "SessionStart",
+          "manualEvent": "sessionStart",
+          "matcher": {
+            "strategy": "regex",
+            "pattern": "startup|resume|clear|compact"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "SessionStart",
+          "manualEvent": "SessionStart",
+          "matcher": {
+            "strategy": "regex",
+            "pattern": "startup|resume|clear|compact"
+          }
+        }
+      }
     },
     {
       "internal": "tool.before",
-      "codex": "preToolUse",
-      "claudeCode": "PreToolUse",
+      "enabled": true,
+      "implemented": true,
+      "status": "enabled",
       "blocking": true,
-      "purpose": "Block source writes before lifecycle state, before design completion, or outside implementation scope."
+      "purpose": "Block source writes before lifecycle state, before design completion, or outside implementation scope.",
+      "statusMessage": "Checking SDLC edit boundary",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "PreToolUse",
+          "manualEvent": "preToolUse",
+          "matcher": {
+            "strategy": "regex",
+            "pattern": "Bash|Edit|MultiEdit|Write"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "PreToolUse",
+          "manualEvent": "PreToolUse",
+          "matcher": {
+            "strategy": "regex",
+            "pattern": "Bash|Edit|MultiEdit|Write"
+          }
+        }
+      }
     },
     {
       "internal": "tool.after",
-      "codex": "postToolUse",
-      "claudeCode": "PostToolUse",
+      "enabled": true,
+      "implemented": true,
+      "status": "enabled",
       "blocking": false,
-      "purpose": "Record tool activity and update hook state."
+      "purpose": "Record tool activity and update hook state.",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "PostToolUse",
+          "manualEvent": "postToolUse",
+          "matcher": {
+            "strategy": "regex",
+            "pattern": "Bash|Edit|MultiEdit|Write"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "PostToolUse",
+          "manualEvent": "PostToolUse",
+          "matcher": {
+            "strategy": "regex",
+            "pattern": "Bash|Edit|MultiEdit|Write"
+          }
+        }
+      }
     },
     {
       "internal": "session.stop",
-      "codex": "stop",
-      "claudeCode": "Stop",
+      "enabled": true,
+      "implemented": true,
+      "status": "enabled",
       "blocking": "configurable",
-      "purpose": "Warn or block when the active phase is incomplete."
+      "purpose": "Warn or block when the active phase is incomplete.",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "Stop",
+          "manualEvent": "stop",
+          "matcher": {
+            "strategy": "all"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "Stop",
+          "manualEvent": "Stop",
+          "matcher": {
+            "strategy": "all"
+          }
+        }
+      }
+    },
+    {
+      "internal": "prompt.submit",
+      "enabled": false,
+      "implemented": false,
+      "status": "roadmap",
+      "blocking": false,
+      "purpose": "Reserved for future prompt-time lifecycle hints before the agent starts tool work.",
+      "platforms": {
+        "codex": {
+          "pluginEvent": "UserPromptSubmit",
+          "manualEvent": "userPromptSubmit",
+          "matcher": {
+            "strategy": "all"
+          }
+        },
+        "claudeCode": {
+          "pluginEvent": "UserPromptSubmit",
+          "manualEvent": "UserPromptSubmit",
+          "matcher": {
+            "strategy": "all"
+          }
+        }
+      }
     }
   ],
   "stateFiles": {

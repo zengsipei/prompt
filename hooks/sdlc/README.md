@@ -142,6 +142,19 @@ Task `status` values considered complete: `done`, `completed`, `complete`,
 - Claude Code example: `hooks/sdlc/manifests/claude.settings.example.json`
 - Neutral event manifest: `hooks/sdlc/manifests/sdlc-hooks.json`
 
+`hooks/sdlc/manifests/sdlc-hooks.json` is the source of truth for hook events.
+After changing event names, matchers, or enabled / implemented flags, regenerate
+the derived platform files:
+
+```bash
+node hooks/sdlc/bin/generate-hook-configs.mjs
+```
+
+The generated outputs are `hooks/codex-hooks.json`, `hooks/claude-hooks.json`,
+`hooks/sdlc/manifests/codex.config.example.toml`, and
+`hooks/sdlc/manifests/claude.settings.example.json`. Tests fail if these files
+drift from the neutral manifest.
+
 The example manifests are for manual or legacy user-level hook wiring with an
 absolute `<RUNTIME_ROOT>` path. The core rules do not depend on either
 platform.

@@ -37,6 +37,16 @@ node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix 
 - Codex: `hooks/sdlc/manifests/codex.config.example.toml`
 - Claude Code: `hooks/sdlc/manifests/claude.settings.example.json`
 
+hook 事件源文件是 `hooks/sdlc/manifests/sdlc-hooks.json`。修改事件名、matcher 或
+enabled / implemented 状态后运行：
+
+```bash
+node hooks/sdlc/bin/generate-hook-configs.mjs
+```
+
+该命令会生成 `hooks/codex-hooks.json`、`hooks/claude-hooks.json` 和两个平台示例配置；
+测试会检查这些生成物是否与中性 manifest 漂移。
+
 ## 硬约束
 
 这些规则默认由 hooks 执行，不依赖 agent 自觉：

@@ -1,3 +1,5 @@
+# Generated from hooks/sdlc/manifests/sdlc-hooks.json.
+# Regenerate with: node hooks/sdlc/bin/generate-hook-configs.mjs
 # Copy these entries into the user Codex config that your Codex version loads.
 # Replace <RUNTIME_ROOT> with the absolute path to the user-level runtime.
 # Projects do not need to copy hooks/sdlc; they only store docs/_sdlc state.
