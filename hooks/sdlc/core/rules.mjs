@@ -11,6 +11,7 @@ import {
   phaseCompletion,
   phasePreconditionEvidenceLabel,
   phasePreconditionsUnmet,
+  recordRequiredCapabilityResult,
   sdlcProfile,
 } from "./artifacts.mjs";
 import { allow, block, warn } from "./result.mjs";
@@ -106,7 +107,7 @@ export function evaluate(event, options = {}) {
       result = evaluateBeforeTool(normalizedEvent, state, root);
       break;
     case "tool.after":
-      result = allow("Recorded SDLC hook event.");
+      result = evaluateAfterTool(normalizedEvent, state, root);
       break;
     case "compact.before":
       result = evaluatePreCompact(state, root);
@@ -158,6 +159,23 @@ export function evaluate(event, options = {}) {
   return result;
 }
 
+function evaluateAfterTool(event, state, root) {
+  if (!state) {
+    return allow("Recorded SDLC hook event.");
+  }
+
+  const recorded = recordRequiredCapabilityResult(state, root, event);
+  if (!recorded) {
+    return allow("Recorded SDLC hook event.");
+  }
+
+  if (recorded.status === "failed") {
+    return allow("Recorded failed required capability tool call.");
+  }
+
+  return allow("Recorded satisfied required capability.");
+}
+
 function shouldRecordEvent(event, state) {
   if (event.name === "prompt.submit" || event.name === "compact.before" || event.name === "compact.after") {
     return true;
@@ -207,7 +225,7 @@ function evaluateBeforeTool(event, state, root) {
   const profile = sdlcProfile(state);
 
   if (event.action === "command.exec") {
-    return evaluateCommand(event, state, profile);
+    return evaluateCommand(event, state, profile, root);
   }
 
   // 只有触及非生命周期文件（≈源码）才进入硬/软门禁；改任务文档恒放行。
@@ -217,29 +235,15 @@ function evaluateBeforeTool(event, state, root) {
   }
 
   // 2) pending 待确认——硬拦（恒 block）。
-  const pending = pendingConfirmations(state, root);
-  if (pending.length > 0) {
-    return block(
-      [
-        "待确认文档未处理，源码编辑被硬拦。",
-        `待确认：${pending.map((item) => item.name).join(", ")}`,
-        "先把待确认文档处理完（标记“状态：已处理”/“决策状态：已决策”），再重试。",
-      ].join("\n"),
-    );
+  const pendingGate = evaluatePendingConfirmations(state, root, "源码编辑");
+  if (pendingGate) {
+    return pendingGate;
   }
 
   // 3) 项目声明的硬前置门禁（按当前阶段）——硬拦。流程灵活后，声明的必做动作不降级为建议。
-  const unmet = phasePreconditionsUnmet(state, root, state.phase);
-  if (unmet.length > 0) {
-    return block(
-      [
-        `当前阶段 ${state.phase} 有项目声明的前置门禁未满足：`,
-        ...unmet.map(
-          (item) => `- 需先提供 ${phasePreconditionEvidenceLabel(item)}${item.reason ? `（${item.reason}）` : ""}`,
-        ),
-        "这是项目通过 registry 声明的硬约束，先完成前置动作再改源码。",
-      ].join("\n"),
-    );
+  const preconditionGate = evaluatePhasePreconditions(state, root);
+  if (preconditionGate) {
+    return preconditionGate;
   }
 
   // 4) 施工边界——implement 阶段硬拦；声明集为空（典型 lite/solo 未声明）或 lite profile 退化为 warn。
@@ -434,7 +438,7 @@ function isRuntimeSummary(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && "activeTaskDir" in value);
 }
 
-function evaluateCommand(event, state, profile) {
+function evaluateCommand(event, state, profile, root) {
   const command = event.command || "";
   if (!looksWriteLikeCommand(command)) {
     return allow("Command does not look like a filesystem write.");
@@ -442,6 +446,18 @@ function evaluateCommand(event, state, profile) {
 
   const paths = event.targetPaths || [];
   const sourceTargets = paths.filter((target) => !isLifecyclePath(target, state));
+
+  if (sourceTargets.length > 0) {
+    const pendingGate = evaluatePendingConfirmations(state, root, "源码写类命令");
+    if (pendingGate) {
+      return pendingGate;
+    }
+
+    const preconditionGate = evaluatePhasePreconditions(state, root);
+    if (preconditionGate) {
+      return preconditionGate;
+    }
+  }
 
   // 设计期的写类命令触及源码：软提示（不再 block，红线已在前面拦掉危险命令）。
   if (sourceTargets.length > 0 && state.phase === "design" && gateLevel(profile, "designSourceEdit") !== "off") {
@@ -451,6 +467,38 @@ function evaluateCommand(event, state, profile) {
   }
 
   return allow("Write-like command passed SDLC checks.");
+}
+
+function evaluatePendingConfirmations(state, root, label) {
+  const pending = pendingConfirmations(state, root);
+  if (pending.length === 0) {
+    return null;
+  }
+
+  return block(
+    [
+      `待确认文档未处理，${label}被硬拦。`,
+      `待确认：${pending.map((item) => item.name).join(", ")}`,
+      "先把待确认文档处理完（标记“状态：已处理”/“决策状态：已决策”），再重试。",
+    ].join("\n"),
+  );
+}
+
+function evaluatePhasePreconditions(state, root) {
+  const unmet = phasePreconditionsUnmet(state, root, state.phase);
+  if (unmet.length === 0) {
+    return null;
+  }
+
+  return block(
+    [
+      `当前阶段 ${state.phase} 有项目声明的前置门禁未满足：`,
+      ...unmet.map(
+        (item) => `- 需先提供 ${phasePreconditionEvidenceLabel(item)}${item.reason ? `（${item.reason}）` : ""}`,
+      ),
+      "这是项目通过 registry 声明的硬约束，先完成前置动作再改源码。",
+    ].join("\n"),
+  );
 }
 
 // phase.set / phase.enter：恒放行（仪式吸收进 skill）。仅就“跳级”与“未满足前置”给软提示。

@@ -1,6 +1,6 @@
 import { evaluate } from "../core/rules.mjs";
 import { asCodexHookJson, printJson } from "../core/result.mjs";
-import { inferTargetPaths, inferToolAction, readStdinJson } from "./common.mjs";
+import { inferTargetPaths, inferToolAction, inferToolFailureReason, inferToolSuccess, readStdinJson } from "./common.mjs";
 
 const EVENT_MAP = {
   sessionStart: "session.start",
@@ -43,6 +43,8 @@ export async function runCodexHook(argv = process.argv.slice(2)) {
     action: inferToolAction(toolName, input),
     targetPaths: inferTargetPaths(toolName, input),
     command: input.command,
+    success: inferToolSuccess(payload),
+    failureReason: inferToolFailureReason(payload),
     payload,
   };
 

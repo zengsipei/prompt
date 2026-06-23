@@ -153,6 +153,8 @@ export function recordEvent(event, result, root = workspaceRoot()) {
     platform: event.platform,
     action: event.action,
     toolName: event.toolName,
+    success: event.success,
+    failureReason: event.failureReason,
     targetPaths: event.targetPaths,
     decision: result.decision,
     severity: result.severity,

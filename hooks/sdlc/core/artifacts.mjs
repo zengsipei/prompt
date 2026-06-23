@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { readJsonIfExists, readTextIfExists, taskPath, toPosixPath } from "./context.mjs";
+import { loadHookState, readJsonIfExists, readTextIfExists, saveHookState, taskPath, toPosixPath } from "./context.mjs";
 import { loadRegistry, registryPhasePreconditions } from "./registry.mjs";
 
 const CONFIRMATION_DONE_PATTERNS = [
@@ -286,16 +286,28 @@ export function inferAllowedPathsFromGit(root) {
 }
 
 export function phasePreconditionEvidenceLabel(precondition) {
-  if (precondition?.enforcement !== "required-evidence") {
-    return "unsupported precondition";
+  if (precondition?.enforcement === "required-evidence") {
+    const evidence = precondition.evidence;
+    if (evidence?.type === "file" && typeof evidence.path === "string" && evidence.path.trim()) {
+      return `file evidence ${toPosixPath(evidence.path.trim())}`;
+    }
+
+    return "unsupported required evidence";
   }
 
-  const evidence = precondition.evidence;
-  if (evidence?.type === "file" && typeof evidence.path === "string" && evidence.path.trim()) {
-    return `file evidence ${toPosixPath(evidence.path.trim())}`;
+  if (precondition?.enforcement === "required-capability") {
+    const capability = requiredCapabilityName(precondition);
+    const aliases = requiredCapabilityToolAliases(precondition);
+    if (capability && aliases.length > 0) {
+      return `capability ${capability} via ${aliases.join(" | ")}`;
+    }
+    if (capability) {
+      return `capability ${capability}`;
+    }
+    return "unsupported required capability";
   }
 
-  return "unsupported required evidence";
+  return "unsupported precondition";
 }
 
 export function requiredEvidenceSatisfied(state, root, precondition) {
@@ -327,15 +339,167 @@ export function requiredEvidenceSatisfied(state, root, precondition) {
   return fs.existsSync(resolved) && readTextIfExists(resolved).trim().length > 0;
 }
 
-// 项目声明的硬前置门禁（registry.phasePreconditions[phase]）中，尚未满足的项。
-// 仅 `enforcement: "required-evidence"` 是机器可执行硬门禁；本 slice 支持非空文件证据。
-export function phasePreconditionsUnmet(state, root, phase) {
+export function requiredCapabilityName(precondition) {
+  return typeof precondition?.capability === "string" ? precondition.capability.trim() : "";
+}
+
+export function requiredCapabilityToolAliases(precondition) {
+  if (!Array.isArray(precondition?.tools)) {
+    return [];
+  }
+
+  const aliases = [];
+  for (const item of precondition.tools) {
+    const value = typeof item === "string" ? item : item?.name;
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const alias = value.trim();
+    if (alias) {
+      aliases.push(alias);
+    }
+  }
+  return aliases;
+}
+
+export function requiredCapabilityMatchesTool(precondition, toolName) {
+  const normalizedTool = normalizeToolName(toolName);
+  if (!normalizedTool) {
+    return false;
+  }
+
+  return requiredCapabilityToolAliases(precondition).some((alias) => normalizeToolName(alias) === normalizedTool);
+}
+
+export function requiredCapabilitySatisfied(state, root, precondition, phase = state?.phase) {
+  if (precondition?.enforcement !== "required-capability") {
+    return true;
+  }
+
+  const key = requiredCapabilityKey(state, precondition, phase);
+  if (!key) {
+    return false;
+  }
+
+  const hookState = loadHookState(state, root);
+  const summaries = Array.isArray(hookState.satisfiedCapabilities) ? hookState.satisfiedCapabilities : [];
+  return summaries.some((summary) => sameCapabilityKey(summary, key));
+}
+
+export function matchingRequiredCapabilityPreconditions(state, root, phase, toolName) {
   if (!state?.activeTaskDir) {
     return [];
   }
 
   const registry = loadRegistry(root);
   return registryPhasePreconditions(registry, phase).filter(
-    (pre) => pre?.enforcement === "required-evidence" && !requiredEvidenceSatisfied(state, root, pre),
+    (pre) => pre?.enforcement === "required-capability" && requiredCapabilityMatchesTool(pre, toolName),
   );
+}
+
+export function recordRequiredCapabilityResult(state, root, event) {
+  const matches = matchingRequiredCapabilityPreconditions(state, root, state?.phase, event?.toolName);
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const at = new Date().toISOString();
+  if (event.success === false) {
+    const failures = matches.map((precondition) => capabilitySummary(state, precondition, event, at, "failed"));
+    const lastCapabilityFailure = failures.length === 1 ? failures[0] : { failedAt: at, failures };
+    saveHookState(state, { lastCapabilityFailure }, root);
+    return { status: "failed", failures };
+  }
+
+  const summaries = matches.map((precondition) => capabilitySummary(state, precondition, event, at, "satisfied"));
+  const hookState = loadHookState(state, root);
+  const previous = Array.isArray(hookState.satisfiedCapabilities) ? hookState.satisfiedCapabilities : [];
+  const next = previous.filter((item) => !summaries.some((summary) => sameCapabilityKey(item, summary)));
+  next.push(...summaries);
+  saveHookState(state, { satisfiedCapabilities: next }, root);
+  return { status: "satisfied", summaries };
+}
+
+function capabilitySummary(state, precondition, event, at, status) {
+  const summary = {
+    taskDir: state.activeTaskDir,
+    phase: state.phase,
+    step: typeof precondition.step === "string" ? precondition.step.trim() : "",
+    capability: requiredCapabilityName(precondition),
+    toolName: typeof event?.toolName === "string" ? event.toolName : "",
+    matchedAlias: matchedToolAlias(precondition, event?.toolName),
+    platform: typeof event?.platform === "string" ? event.platform : "",
+    action: typeof event?.action === "string" ? event.action : "",
+  };
+
+  if (status === "failed") {
+    return {
+      ...summary,
+      failedAt: at,
+      reason: event?.failureReason || "Tool call reported failure.",
+    };
+  }
+
+  return {
+    ...summary,
+    satisfiedAt: at,
+  };
+}
+
+function requiredCapabilityKey(state, precondition, phase = state?.phase) {
+  const taskDir = state?.activeTaskDir;
+  const step = typeof precondition?.step === "string" ? precondition.step.trim() : "";
+  const capability = requiredCapabilityName(precondition);
+  const phaseName = typeof phase === "string" ? phase.trim() : "";
+
+  if (!taskDir || !phaseName || !step || !capability) {
+    return null;
+  }
+
+  return {
+    taskDir,
+    phase: phaseName,
+    step,
+    capability,
+  };
+}
+
+function sameCapabilityKey(left, right) {
+  return (
+    left?.taskDir === right?.taskDir &&
+    left?.phase === right?.phase &&
+    left?.step === right?.step &&
+    left?.capability === right?.capability
+  );
+}
+
+function matchedToolAlias(precondition, toolName) {
+  const normalizedTool = normalizeToolName(toolName);
+  return requiredCapabilityToolAliases(precondition).find((alias) => normalizeToolName(alias) === normalizedTool) || "";
+}
+
+function normalizeToolName(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+// 项目声明的硬前置门禁（registry.phasePreconditions[phase]）中，尚未满足的项。
+// 支持 required-evidence（非空文件证据）和 required-capability（成功工具调用）。
+export function phasePreconditionsUnmet(state, root, phase) {
+  if (!state?.activeTaskDir) {
+    return [];
+  }
+
+  const registry = loadRegistry(root);
+  return registryPhasePreconditions(registry, phase).filter((pre) => {
+    if (pre?.enforcement === "required-evidence") {
+      return !requiredEvidenceSatisfied(state, root, pre);
+    }
+
+    if (pre?.enforcement === "required-capability") {
+      return !requiredCapabilitySatisfied(state, root, pre, phase);
+    }
+
+    return false;
+  });
 }

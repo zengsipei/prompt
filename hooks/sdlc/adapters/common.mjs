@@ -149,6 +149,67 @@ export function inferTargetPaths(toolName, input = {}, root = workspaceRoot()) {
   return [...paths].filter(Boolean);
 }
 
+export function inferToolSuccess(payload = {}) {
+  for (const key of ["success", "ok"]) {
+    if (typeof payload[key] === "boolean") {
+      return payload[key];
+    }
+  }
+
+  if (payload.is_error === true || payload.isError === true) {
+    return false;
+  }
+
+  const response = payload.tool_response || payload.toolResponse || payload.response || payload.result || {};
+  if (response && typeof response === "object") {
+    for (const key of ["success", "ok"]) {
+      if (typeof response[key] === "boolean") {
+        return response[key];
+      }
+    }
+
+    if (response.is_error === true || response.isError === true || response.error) {
+      return false;
+    }
+  }
+
+  if (payload.error || payload.exception) {
+    return false;
+  }
+
+  if (typeof payload.exit_code === "number") {
+    return payload.exit_code === 0;
+  }
+
+  if (typeof payload.exitCode === "number") {
+    return payload.exitCode === 0;
+  }
+
+  return true;
+}
+
+export function inferToolFailureReason(payload = {}) {
+  const response = payload.tool_response || payload.toolResponse || payload.response || payload.result || {};
+  const value =
+    payload.error ||
+    payload.exception ||
+    payload.reason ||
+    payload.message ||
+    response?.error ||
+    response?.reason ||
+    response?.message;
+
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  if (value && typeof value === "object" && typeof value.message === "string") {
+    return value.message.trim();
+  }
+
+  return "";
+}
+
 export function ensureExecutablePath(filePath) {
   try {
     fs.chmodSync(filePath, 0o755);

@@ -343,6 +343,320 @@ function run() {
     assert.equal(allowed.decision, "allow");
   }
 
+  // 项目声明的 required-capability 门禁：当前 phase 内成功匹配的 PostToolUse 满足门禁。
+  {
+    const root = makeWorkspace();
+    const state = seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph", "mcp__codegraph__search"],
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const before = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(before.decision, "deny");
+    assert.match(before.reason, /semantic code search/u);
+
+    const recorded = evaluate(
+      {
+        name: "tool.after",
+        platform: "test",
+        rawEventName: "PostToolUse",
+        toolName: "codegraph",
+        success: true,
+      },
+      { cwd: root },
+    );
+    assert.equal(recorded.decision, "allow");
+
+    const hookState = readJsonIfExists(hookStatePath(state, root), {});
+    assert.equal(hookState.satisfiedCapabilities.length, 1);
+    assert.equal(hookState.satisfiedCapabilities[0].taskDir, "docs/login-fix");
+    assert.equal(hookState.satisfiedCapabilities[0].phase, "implement");
+    assert.equal(hookState.satisfiedCapabilities[0].step, "locate-code");
+    assert.equal(hookState.satisfiedCapabilities[0].capability, "semantic code search");
+    assert.equal(hookState.satisfiedCapabilities[0].toolName, "codegraph");
+
+    const after = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(after.decision, "allow");
+  }
+
+  // required-capability：失败调用不满足门禁，只更新 lastCapabilityFailure 供排查。
+  {
+    const root = makeWorkspace();
+    const state = seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph"],
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    evaluate(
+      {
+        name: "tool.after",
+        platform: "test",
+        rawEventName: "PostToolUse",
+        toolName: "codegraph",
+        success: false,
+        failureReason: "index unavailable",
+      },
+      { cwd: root },
+    );
+
+    const hookState = readJsonIfExists(hookStatePath(state, root), {});
+    assert.equal(hookState.satisfiedCapabilities, undefined);
+    assert.equal(hookState.lastCapabilityFailure.capability, "semantic code search");
+    assert.equal(hookState.lastCapabilityFailure.toolName, "codegraph");
+    assert.equal(hookState.lastCapabilityFailure.reason, "index unavailable");
+
+    const blocked = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(blocked.decision, "deny");
+  }
+
+  // required-capability：tools 是同一能力的别名集合，任一别名成功即可满足。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph", "mcp__codegraph__search"],
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    evaluate(
+      {
+        name: "tool.after",
+        platform: "test",
+        rawEventName: "PostToolUse",
+        toolName: "mcp__codegraph__search",
+        success: true,
+      },
+      { cwd: root },
+    );
+
+    const allowed = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(allowed.decision, "allow");
+  }
+
+  // required-capability：同 task/phase/step/capability 的重复成功覆盖 summary，完整历史仍在事件日志。
+  {
+    const root = makeWorkspace();
+    const state = seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph", "mcp__codegraph__search"],
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    evaluate(
+      {
+        name: "tool.after",
+        platform: "test",
+        rawEventName: "PostToolUse",
+        toolName: "codegraph",
+        success: true,
+      },
+      { cwd: root },
+    );
+    evaluate(
+      {
+        name: "tool.after",
+        platform: "test",
+        rawEventName: "PostToolUse",
+        toolName: "mcp__codegraph__search",
+        success: true,
+      },
+      { cwd: root },
+    );
+
+    const hookState = readJsonIfExists(hookStatePath(state, root), {});
+    assert.equal(hookState.satisfiedCapabilities.length, 1);
+    assert.equal(hookState.satisfiedCapabilities[0].toolName, "mcp__codegraph__search");
+    assert.equal(hookState.satisfiedCapabilities[0].matchedAlias, "mcp__codegraph__search");
+
+    const events = readEvents(root);
+    assert.equal((events.match(/"event":"tool.after"/gu) || []).length, 2);
+    assert.equal((events.match(/"success":true/gu) || []).length, 2);
+  }
+
+  // required-capability：满足状态不跨 phase 复用，且只匹配当前 phase 的 preconditions。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        design: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph"],
+          },
+        ],
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph"],
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    evaluate(
+      {
+        name: "tool.after",
+        platform: "test",
+        rawEventName: "PostToolUse",
+        toolName: "codegraph",
+        success: true,
+      },
+      { cwd: root },
+    );
+
+    const designEdit = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(designEdit.decision, "allow");
+    assert.equal(designEdit.severity, "warning");
+
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    const implementEdit = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(implementEdit.decision, "deny");
+    assert.match(implementEdit.reason, /semantic code search/u);
+  }
+
+  // required-capability：未满足时也会阻断触及源码的写类命令，但不阻断生命周期文档命令。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph"],
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const sourceCommand = evaluate(
+      {
+        name: "tool.before",
+        platform: "test",
+        action: "command.exec",
+        command: "npm run build > src/login.ts",
+        targetPaths: ["src/login.ts"],
+      },
+      { cwd: root },
+    );
+    assert.equal(sourceCommand.decision, "deny");
+    assert.match(sourceCommand.reason, /semantic code search/u);
+
+    const lifecycleCommand = evaluate(
+      {
+        name: "tool.before",
+        platform: "test",
+        action: "command.exec",
+        command: "Set-Content docs/login-fix/onlyAI/notes.md ok",
+        targetPaths: ["docs/login-fix/onlyAI/notes.md"],
+      },
+      { cwd: root },
+    );
+    assert.equal(lifecycleCommand.decision, "allow");
+  }
+
+  // required-capability：满足状态不跨 task 复用。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { activeTaskDir: "docs/login-fix", phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph"],
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    evaluate(
+      {
+        name: "tool.after",
+        platform: "test",
+        rawEventName: "PostToolUse",
+        toolName: "codegraph",
+        success: true,
+      },
+      { cwd: root },
+    );
+
+    assert.equal(evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root }).decision, "allow");
+
+    seedCurrent(root, { activeTaskDir: "docs/password-fix", phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "password-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const otherTask = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(otherTask.decision, "deny");
+    assert.match(otherTask.reason, /semantic code search/u);
+  }
+
   // registry 合并：项目覆盖替换某步骤工具链，默认步骤仍在。
   {
     const root = makeWorkspace();
