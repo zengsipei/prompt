@@ -57,6 +57,7 @@ export function extractPatchPaths(patchText, root = workspaceRoot()) {
     /^\+\+\+ b\/(.+)$/gmu,
     /^--- a\/(.+)$/gmu,
     /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gmu,
+    /^\*\*\* Move to: (.+)$/gmu,
   ];
 
   for (const pattern of patterns) {
@@ -69,6 +70,38 @@ export function extractPatchPaths(patchText, root = workspaceRoot()) {
   }
 
   return [...paths].filter(Boolean);
+}
+
+function isApplyPatchTool(toolName) {
+  const name = String(toolName || "").toLowerCase();
+  return name === "apply_patch" || name.endsWith(".apply_patch");
+}
+
+function addStructuredPath(paths, value, root) {
+  if (typeof value !== "string") {
+    return;
+  }
+
+  paths.add(normalizeRelativePath(value, root));
+}
+
+function addStructuredPathArray(paths, value, root) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  for (const item of value) {
+    addStructuredPath(paths, item, root);
+  }
+}
+
+function patchTexts(input, includeCommand = false) {
+  const values = [input.patch, input.diff, input.content];
+  if (includeCommand) {
+    values.push(input.command);
+  }
+
+  return values.filter((value) => typeof value === "string" && value.trim());
 }
 
 export function inferCommandPaths(command, root = workspaceRoot()) {
@@ -120,27 +153,29 @@ export function inferTargetPaths(toolName, input = {}, root = workspaceRoot()) {
   const paths = new Set();
 
   for (const key of ["path", "file_path", "filePath", "target", "targetPath"]) {
-    if (typeof input[key] === "string") {
-      paths.add(normalizeRelativePath(input[key], root));
-    }
+    addStructuredPath(paths, input[key], root);
+  }
+
+  for (const key of ["paths", "file_paths", "filePaths", "targetPaths"]) {
+    addStructuredPathArray(paths, input[key], root);
   }
 
   if (Array.isArray(input.edits)) {
     for (const edit of input.edits) {
-      if (typeof edit?.path === "string") {
-        paths.add(normalizeRelativePath(edit.path, root));
-      }
-      if (typeof edit?.file_path === "string") {
-        paths.add(normalizeRelativePath(edit.file_path, root));
-      }
+      addStructuredPath(paths, edit?.path, root);
+      addStructuredPath(paths, edit?.file_path, root);
+      addStructuredPath(paths, edit?.filePath, root);
     }
   }
 
-  for (const pathFromPatch of extractPatchPaths(input.patch || input.diff || input.content || "", root)) {
-    paths.add(pathFromPatch);
+  const applyPatch = isApplyPatchTool(toolName);
+  for (const text of patchTexts(input, applyPatch)) {
+    for (const pathFromPatch of extractPatchPaths(text, root)) {
+      paths.add(pathFromPatch);
+    }
   }
 
-  if (input.command) {
+  if (input.command && !applyPatch) {
     for (const pathFromCommand of inferCommandPaths(input.command, root)) {
       paths.add(pathFromCommand);
     }

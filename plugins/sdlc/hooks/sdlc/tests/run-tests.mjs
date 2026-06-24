@@ -22,6 +22,7 @@ import {
 } from "../core/hook-config-generator.mjs";
 import { normalizeCodexEventName } from "../adapters/codex.mjs";
 import { asClaudeHookJson, normalizeClaudeCodeEventName } from "../adapters/claude-code.mjs";
+import { inferTargetPaths } from "../adapters/common.mjs";
 
 function makeWorkspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-hooks-"));
@@ -61,6 +62,22 @@ function event(extra) {
     ...extra,
   };
 }
+
+const pollutedApplyPatchPayload = `*** Begin Patch
+*** Update File: server.js
+@@
+-const lifecycleFiles = [];
++const lifecycleFiles = [
++  "current.json",
++  "hook-events.ndjson",
++  "registry.json",
++  "001-概要设计.md",
++];
++const render = (task) => task.items.map((item) => ({
++  id: item.id,
++  label: \`<span>{\${item.name}}</span>\`,
++}));
+*** End Patch`;
 
 function run() {
   // hook 配置生成物不得从中性 manifest 漂移。
@@ -377,6 +394,54 @@ function run() {
     assert.equal(evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root }).decision, "allow");
     assert.equal(evaluate(event({ targetPaths: ["src/shared.ts"] }), { cwd: root }).decision, "allow");
     const blocked = evaluate(event({ targetPaths: ["src/other.ts"] }), { cwd: root });
+    assert.equal(blocked.decision, "deny");
+    assert.match(blocked.reason, /施工边界/u);
+  }
+
+  // Codex apply_patch：只从真实 patch header 推断目标，不把 patch body 当 shell command 路径扫描。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["server.js"] }],
+    });
+
+    const targetPaths = inferTargetPaths("apply_patch", { command: pollutedApplyPatchPayload }, root);
+    assert.deepEqual(targetPaths, ["server.js"]);
+
+    const allowed = evaluate(
+      event({ platform: "codex", toolName: "apply_patch", action: "fs.edit", targetPaths }),
+      { cwd: root },
+    );
+    assert.equal(allowed.decision, "allow");
+  }
+
+  // Codex apply_patch：越界 patch header 仍会被 implement 施工边界硬拦。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["server.js"] }],
+    });
+
+    const targetPaths = inferTargetPaths(
+      "apply_patch",
+      {
+        command: `*** Begin Patch
+*** Update File: src/outside.js
+@@
+-export const value = 1;
++export const value = 2;
+*** End Patch`,
+      },
+      root,
+    );
+    assert.deepEqual(targetPaths, ["src/outside.js"]);
+
+    const blocked = evaluate(
+      event({ platform: "codex", toolName: "apply_patch", action: "fs.edit", targetPaths }),
+      { cwd: root },
+    );
     assert.equal(blocked.decision, "deny");
     assert.match(blocked.reason, /施工边界/u);
   }
