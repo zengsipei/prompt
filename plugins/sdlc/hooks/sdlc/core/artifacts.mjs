@@ -150,6 +150,48 @@ export function allTaskPlanTasksCompleted(taskPlan) {
   });
 }
 
+export function taskPlanDiagnostics(state, root) {
+  const taskPlan = loadTaskPlan(state, root);
+  if (!taskPlan) {
+    return [];
+  }
+
+  const diagnostics = [];
+  const planPath = `${state.activeTaskDir}/onlyAI/task-plan.json`;
+  const completeStatuses = "done, completed, complete, [x], 已完成";
+  const tasks = Array.isArray(taskPlan.tasks) ? taskPlan.tasks : [];
+
+  if (!Array.isArray(taskPlan.tasks)) {
+    if (Array.isArray(taskPlan.subtasks)) {
+      diagnostics.push(`${planPath} 识别到 0 个 tasks；是否把 tasks 误写成 subtasks？`);
+    } else {
+      diagnostics.push(`${planPath} 识别到 0 个 tasks；请使用 tasks 数组。`);
+    }
+  } else if (tasks.length === 0) {
+    diagnostics.push(`${planPath} 识别到 0 个 tasks；请至少声明一个任务。`);
+  }
+
+  const invalidTasks = tasks
+    .map((task, index) => {
+      const taskId = typeof task?.id === "string" && task.id.trim() ? task.id.trim() : `#${index + 1}`;
+      const status = String(task?.status || "").trim().toLowerCase();
+      if (!status) {
+        return `${taskId} 缺少 status`;
+      }
+      if (!["done", "completed", "complete", "[x]", "已完成"].includes(status)) {
+        return `${taskId} status=${JSON.stringify(task.status)}`;
+      }
+      return "";
+    })
+    .filter(Boolean);
+
+  if (invalidTasks.length > 0) {
+    diagnostics.push(`${planPath} 任务状态未完成或非法：${invalidTasks.join("；")}。完成状态需为 ${completeStatuses}。`);
+  }
+
+  return diagnostics;
+}
+
 export function allTasksCompleted(text) {
   const taskRows = text
     .split(/\r?\n/u)

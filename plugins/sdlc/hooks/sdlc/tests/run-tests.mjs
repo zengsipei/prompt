@@ -839,6 +839,32 @@ function run() {
       ["src/login.ts"],
     );
   }
+
+  // statusPayload：task-plan schema 违约时给出可操作诊断，而不是只提示 implement incomplete。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      subtasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const payload = statusPayload(root);
+    assert.equal(payload.completion.implement, false);
+    assert.ok(
+      payload.blockingReasons.some((reason) => /tasks.*subtasks/u.test(reason)),
+      `Expected subtasks diagnostic, got: ${payload.blockingReasons.join(" | ")}`,
+    );
+
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const missingStatusPayload = statusPayload(root);
+    assert.ok(
+      missingStatusPayload.blockingReasons.some((reason) => /status/u.test(reason)),
+      `Expected missing status diagnostic, got: ${missingStatusPayload.blockingReasons.join(" | ")}`,
+    );
+  }
 }
 
 run();

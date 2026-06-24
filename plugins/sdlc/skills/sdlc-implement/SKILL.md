@@ -23,6 +23,24 @@ sdlc-hook phase.set --phase implement
 - **项目前置门禁**：若项目 registry 声明了 implement 前置（如「codegraph 检索待修改部分」），**必须先提供 required-evidence 证据**，否则源码编辑被硬拦。当前支持文件证据：路径相对当前任务目录，且文件必须存在并在去除空白后非空。`status` 的 `phasePreconditions` 列出未满足项。
 - **待确认**：有未处理待确认会硬拦——先回 `sdlc-design` 处理。
 
+`onlyAI/task-plan.json` 必须使用 `tasks[]`，每个任务必须有 `status`。完成状态只认：`done`、`completed`、`complete`、`[x]`、`已完成`。不要写成 `subtasks`。
+
+最小示例：
+
+```json
+{
+  "allowedPaths": ["src/login.ts"],
+  "tasks": [
+    {
+      "id": "T-01",
+      "status": "pending",
+      "allowedPaths": ["src/login.ts"],
+      "verification": ["npm test -- login"]
+    }
+  ]
+}
+```
+
 ## 逐任务循环
 
 每个任务：① 按该任务文件清单编码（`locate-code` 取定位工具链）→ ② 在 `003-文件改动记录.md` 记本次改动文件（full 才写行号范围）→ ③ 更新 `003-施工文档.md` / task-plan 的任务状态 → ④ full 追加 `onlyAI/operations-log.md`。

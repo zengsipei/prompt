@@ -19,6 +19,7 @@ import {
   phasePreconditionsUnmet,
   pendingConfirmations,
   sdlcProfile,
+  taskPlanDiagnostics,
   taskPlanPath,
 } from "../core/artifacts.mjs";
 import { effectiveFlow, loadRegistry, resolveStep } from "../core/registry.mjs";
@@ -252,7 +253,7 @@ export function statusPayload(root) {
     profile: sdlcProfile(state),
     runtimeRoot: RUNTIME_ROOT,
     nextAction: nextAction(state, completion, pending),
-    blockingReasons: blockingReasons(state, completion, pending),
+    blockingReasons: blockingReasons(state, root, completion, pending),
     requiredArtifacts: requiredArtifacts(state, root),
     recommendedReads: recommendedReads(state),
     allowedPaths: allowedPaths(state, root),
@@ -319,7 +320,7 @@ function nextAction(state, completion, pending) {
   return "Inspect current state and choose the next lifecycle command.";
 }
 
-function blockingReasons(state, completion, pending) {
+function blockingReasons(state, root, completion, pending) {
   if (!state) {
     return ["docs/_sdlc/current.json is missing."];
   }
@@ -330,6 +331,7 @@ function blockingReasons(state, completion, pending) {
   }
   if (!completion[state.phase]) {
     reasons.push(`Current phase ${state.phase} is incomplete.`);
+    reasons.push(...taskPlanDiagnostics(state, root));
   }
   return reasons;
 }
