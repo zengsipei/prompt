@@ -103,9 +103,14 @@ function run() {
     const allowed = allow("ok");
     assert.deepEqual(asHookJson(allowed, "PostToolUse"), { decision: "allow" });
     assert.deepEqual(asCodexHookJson(allowed, "PostToolUse"), {});
-    assert.deepEqual(asCodexHookJson(allowed, "PreToolUse"), { decision: "allow" });
+    assert.deepEqual(asCodexHookJson(allowed, "PreToolUse"), {});
+    assert.deepEqual(asCodexHookJson(allowed, "Stop"), {});
+    assert.deepEqual(asCodexHookJson(warn("阶段未完成"), "Stop"), { systemMessage: "阶段未完成" });
+    assert.deepEqual(asCodexHookJson(block("阶段未完成"), "Stop"), {
+      decision: "block",
+      reason: "阶段未完成",
+    });
     assert.deepEqual(asCodexHookJson(allow("ok", { additionalContext: "ctx" }), "UserPromptSubmit"), {
-      decision: "allow",
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
         additionalContext: "ctx",
@@ -113,8 +118,11 @@ function run() {
     });
     assert.deepEqual(codexHookFailureJson(new Error("boom"), "PostToolUse"), {});
     assert.deepEqual(codexHookFailureJson(new Error("boom"), "PreToolUse"), {
-      decision: "deny",
-      reason: "SDLC Codex hook failed: boom",
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "SDLC Codex hook failed: boom",
+      },
     });
     assert.deepEqual(codexHookFailureJson(new Error("boom"), "UserPromptSubmit"), {});
     assert.deepEqual(hookFailureJson(new Error("boom"), "UserPromptSubmit", "SDLC Claude Code"), {
@@ -124,6 +132,55 @@ function run() {
     assert.deepEqual(hookFailureJson(new Error("boom"), "PreCompact", "SDLC Claude Code"), {
       decision: "allow",
       reason: "SDLC Claude Code hook failed without blocking: boom",
+    });
+  }
+
+  // Codex 适配层分事件合同：Codex hooks 不是统一 allow/deny JSON。
+  {
+    assert.deepEqual(asCodexHookJson(block("待确认未处理"), "PreToolUse"), {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "待确认未处理",
+      },
+    });
+    assert.deepEqual(asCodexHookJson(warn("设计期改源码"), "PreToolUse"), {
+      systemMessage: "设计期改源码",
+    });
+    assert.deepEqual(asCodexHookJson(allow("ok", { additionalContext: "ctx" }), "SessionStart"), {
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "ctx" },
+    });
+    assert.deepEqual(asCodexHookJson(warn("prompt guidance"), "UserPromptSubmit"), {
+      systemMessage: "prompt guidance",
+    });
+    assert.deepEqual(asCodexHookJson(block("prompt blocked"), "UserPromptSubmit"), {
+      decision: "block",
+      reason: "prompt blocked",
+    });
+    assert.deepEqual(asCodexHookJson(warn("pre compact warning"), "PreCompact"), {
+      systemMessage: "pre compact warning",
+    });
+    assert.deepEqual(asCodexHookJson(block("pre compact blocked"), "PreCompact"), {
+      continue: false,
+      stopReason: "pre compact blocked",
+    });
+    assert.deepEqual(asCodexHookJson(warn("post compact warning"), "PostCompact"), {
+      systemMessage: "post compact warning",
+    });
+    assert.deepEqual(asCodexHookJson(allow("ok", { additionalContext: "ctx" }), "PreToolUse"), {});
+    assert.deepEqual(asCodexHookJson(allow("ok", { additionalContext: "ctx" }), "PostToolUse"), {});
+    assert.deepEqual(asCodexHookJson(block("tool feedback"), "PostToolUse"), {
+      decision: "block",
+      reason: "tool feedback",
+    });
+    assert.deepEqual(asCodexHookJson(block("permission denied"), "PermissionRequest"), {
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: {
+          behavior: "deny",
+          message: "permission denied",
+        },
+      },
     });
   }
 
