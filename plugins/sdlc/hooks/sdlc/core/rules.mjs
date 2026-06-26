@@ -55,9 +55,30 @@ function readBootstrap() {
   }
 }
 
+// closed 终端态的精简注入：只告知“上一个任务已关闭 + 如何初始化新任务”。
+// 刻意不复述完整 bootstrap / 当前任务门禁，避免 resume 把已关闭任务误当活动任务（PRD 核心风险）。
+function closedContextMessage(state) {
+  const last = state?.lastTask || null;
+  const reason = last?.reason ? `（原因：${last.reason}）` : "";
+  const lastDir = last?.dir || "上一个任务";
+  return [
+    `运行时：把 \`sdlc-hook\` 简写展开为 \`${hookCommand()}\``,
+    "",
+    `SDLC：上一个任务已关闭${reason}：${lastDir}。当前无活动任务（idle/closed）。`,
+    "开始新任务：`sdlc-hook init --task-dir docs/[task] --system [system] --profile lite|standard|full`。",
+    "全局红线仍生效；任务门禁会在初始化新任务后恢复，不沿用已关闭任务的边界。",
+  ].join("\n");
+}
+
 // SessionStart 注入：仅对已初始化项目注入共享 bootstrap 与当前生命周期状态。
 // 两端（Codex/Claude）同源交付——这是双端 bootstrap 的 SSOT。
 export function sessionContextMessage(state) {
+  // closed 终端态：只注入“上个任务已关闭 + 如何初始化新任务”，不复述完整 bootstrap 与任务门禁。
+  // 这是规避 PRD 核心风险（resume 把已关闭任务误当活动任务）的关键；全局红线仍由 hook 强制。
+  if (state?.phase === "closed") {
+    return closedContextMessage(state);
+  }
+
   const lines = [];
   const bootstrap = readBootstrap();
   if (bootstrap) {
@@ -201,6 +222,12 @@ function evaluateBeforeTool(event, state, root) {
   const redline = detectRedline(event);
   if (redline) {
     return redline;
+  }
+
+  // 0.5) closed 终端态：红线之外不再施加任何任务专属门禁（pending / 项目前置 / 施工边界）。
+  // 任务已关闭、activeTaskDir 为空，旧任务边界不应影响无关工作——红线之后即放行。
+  if (state?.phase === "closed") {
+    return allow("Closed lifecycle: task-specific SDLC gates inactive; global redlines still apply.");
   }
 
   if (!WRITE_ACTIONS.has(event.action) && event.action !== "command.exec") {
@@ -494,6 +521,11 @@ function evaluatePhaseSet(event, state, root) {
 }
 
 function evaluateStop(event, state, root, options = {}) {
+  // closed 终端态：任务已关闭，无阶段完整度可评，stop 不再按旧任务门禁判定。
+  if (state?.phase === "closed") {
+    return allow("Closed lifecycle; no active task to stop-gate.");
+  }
+
   const profile = sdlcProfile(state);
   const phase = event.phase || state.phase;
   const complete = phaseCompletion(state, root);

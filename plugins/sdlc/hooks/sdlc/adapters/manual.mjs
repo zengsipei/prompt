@@ -24,8 +24,9 @@ import {
 } from "../core/artifacts.mjs";
 import { effectiveFlow, loadRegistry, resolveStep } from "../core/registry.mjs";
 import { evaluate } from "../core/rules.mjs";
-import { printJson } from "../core/result.mjs";
+import { allow, block, printJson } from "../core/result.mjs";
 import { hookCommand, RUNTIME_ROOT } from "../core/runtime.mjs";
+import { currentSessionId, sessionPath } from "../core/session.mjs";
 import { inferTargetPaths, parseArgs } from "./common.mjs";
 
 // 默认阶段顺序（软建议）：design-1/design-2 已合并为 design。
@@ -131,6 +132,17 @@ export function runManual(argv = process.argv.slice(2)) {
       root,
       { requireComplete: args["require-complete"] === true },
     );
+  }
+
+  // 显式关闭任务：completed 需 design/implement/test 证据齐全且无待确认；
+  // canceled/wontfix/superseded 需 --note，可关闭未完成工作。关闭后进入 closed 终端态。
+  if (command === "task.close") {
+    const result = closeTask(args, root);
+    printJson(result);
+    if (result.decision === "deny") {
+      process.exitCode = 2;
+    }
+    return;
   }
 
   return help();
@@ -262,6 +274,113 @@ export function statusPayload(root) {
   };
 }
 
+// 关闭原因：completed 为成功收尾；canceled/wontfix/superseded 为非成功收尾（需 close note）。
+const CLOSE_REASONS = ["completed", "canceled", "wontfix", "superseded"];
+const SUCCESSFUL_CLOSE_REASON = "completed";
+const SUCCESS_EVIDENCE_PHASES = ["design", "implement", "test"];
+
+// 显式关闭活动任务，把生命周期推入 closed 终端态。
+// 返回 result（不 printJson），供 runManual 与运行时测试共用同一高层 seam。
+export function closeTask(args = {}, root = workspaceRoot()) {
+  const state = loadCurrentState(root);
+  if (!state || !state.activeTaskDir) {
+    return block("没有活动任务可关闭：task.close 需要已初始化且尚未关闭的任务。");
+  }
+
+  const reason = typeof args.reason === "string" ? args.reason.trim().toLowerCase() : "";
+  if (!CLOSE_REASONS.includes(reason)) {
+    return block(`task.close 需要 --reason，取值之一：${CLOSE_REASONS.join(" | ")}。`);
+  }
+
+  const note = typeof args.note === "string" ? args.note.trim() : "";
+  const completion = phaseCompletion(state, root);
+  const pending = pendingConfirmations(state, root);
+  const completed = reason === SUCCESSFUL_CLOSE_REASON;
+
+  if (completed) {
+    // 成功关闭：design/implement/test 证据齐全且无待确认，否则拒绝并保持任务活动。
+    const missing = SUCCESS_EVIDENCE_PHASES.filter((phase) => !completion[phase]);
+    if (missing.length > 0 || pending.length > 0) {
+      const reasons = [];
+      if (missing.length > 0) {
+        reasons.push(`未完成阶段证据：${missing.join(", ")}`);
+        reasons.push(...taskPlanDiagnostics(state, root));
+      }
+      if (pending.length > 0) {
+        reasons.push(`未处理待确认：${pending.map((item) => item.name).join(", ")}`);
+      }
+      return block(
+        [
+          "task.close --reason completed 被拒：完成证据不齐，任务保持活动。",
+          ...reasons,
+          "补齐缺失证据后重试，或改用 --reason canceled|wontfix|superseded --note <说明> 关闭未完成工作。",
+        ].join("\n"),
+      );
+    }
+  } else if (!note) {
+    // 非成功关闭：必须给出简短 close note，便于日后理解为何未完成即关闭。
+    return block(`task.close --reason ${reason} 需要 --note <简短说明>，以记录未完成即关闭的缘由。`);
+  }
+
+  const closedAt = new Date().toISOString();
+  const sessionRecord = readJsonIfExists(sessionPath(root), null);
+  const sessionId = sessionRecord?.sessionId || currentSessionId(root) || null;
+  // session name 为 best-effort：会话记录已有则采用，否则留 null（stop-time 命名属后续能力）。
+  const sessionName = sessionRecord?.sessionName || sessionRecord?.name || null;
+  const taskDir = state.activeTaskDir;
+  const diagnosticsRef = "docs/_sdlc/session-diagnostics.json";
+  const closureRelPath = `${taskDir}/onlyAI/closure.json`;
+
+  // 最终关闭证据：写进被关闭任务目录内，关闭后可独立审计而无需回读整个会话。
+  const closureEvidence = {
+    taskDir,
+    closedAt,
+    reason,
+    note,
+    completed,
+    completion,
+    pendingConfirmations: pending.map((item) => item.name),
+    sessionId,
+    sessionName,
+    diagnostics: diagnosticsRef,
+  };
+  writeJson(path.join(root, taskDir, "onlyAI", "closure.json"), closureEvidence);
+
+  // 转入 closed 终端态：清空 activeTaskDir，previous task 仅经显式 lastTask 字段保留，
+  // 杜绝把已关闭任务当成活动任务（PRD 核心风险）。保留全局配置（mode/strict/profile…）。
+  const nextState = { ...state };
+  delete nextState.compactSummary;
+  nextState.phase = "closed";
+  nextState.activeTaskDir = null;
+  nextState.lastTask = {
+    dir: taskDir,
+    closedAt,
+    reason,
+    note,
+    completed,
+    completion,
+    sessionId,
+    sessionName,
+    closureEvidence: closureRelPath,
+  };
+  writeJson(currentStatePath(root), nextState);
+
+  return allow(
+    [
+      `任务已关闭（${reason}${completed ? "，已完成" : "，未完成"}）：${taskDir}。`,
+      `最终关闭证据：${closureRelPath}`,
+      "生命周期进入 closed：无活动任务，旧任务门禁不再生效（全局红线仍在）。",
+      "开始新任务：`sdlc-hook init --task-dir docs/[task] --system [system]`。",
+    ].join("\n"),
+    {
+      closeReason: reason,
+      completed,
+      lastTask: nextState.lastTask,
+      closureEvidence: closureRelPath,
+    },
+  );
+}
+
 function runEvent(event, root, options = {}) {
   const result = evaluate(
     {
@@ -291,6 +410,8 @@ function help() {
       `${hookCommand()} step locate-code`,
       `${hookCommand()} tool.before --action fs.edit --path src/foo.ts`,
       `${hookCommand()} session.stop --require-complete`,
+      `${hookCommand()} task.close --reason completed`,
+      `${hookCommand()} task.close --reason canceled|wontfix|superseded --note "原因"`,
     ],
   });
 }

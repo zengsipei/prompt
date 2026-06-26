@@ -4,7 +4,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { evaluate } from "../core/rules.mjs";
 import { allow, asCodexHookJson, asHookJson, block, codexHookFailureJson, hookFailureJson, warn } from "../core/result.mjs";
-import { eventsPath, hookStatePath, readJsonIfExists, writeJson } from "../core/context.mjs";
+import { currentStatePath, eventsPath, hookStatePath, readJsonIfExists, writeJson } from "../core/context.mjs";
 import { currentSessionId, diagnosticsPath, sessionPath } from "../core/session.mjs";
 import {
   implementationAllowedPaths,
@@ -13,7 +13,7 @@ import {
   phasePreconditionsUnmet,
 } from "../core/artifacts.mjs";
 import { loadRegistry, resolveStep } from "../core/registry.mjs";
-import { statusPayload } from "../adapters/manual.mjs";
+import { closeTask, statusPayload } from "../adapters/manual.mjs";
 import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
 import {
   GENERATE_HOOK_CONFIGS_COMMAND,
@@ -1031,6 +1031,137 @@ function run() {
       missingStatusPayload.blockingReasons.some((reason) => /status/u.test(reason)),
       `Expected missing status diagnostic, got: ${missingStatusPayload.blockingReasons.join(" | ")}`,
     );
+  }
+
+  // task.close --reason completed：design/implement/test 证据齐全且无待确认时成功关闭，
+  // 进入 closed 终端态、清空 activeTaskDir、写 lastTask 与最终关闭证据（含 sessionId / 诊断引用）。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done" }],
+    });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const sessionId = currentSessionId(root);
+
+    const result = closeTask({ reason: "completed" }, root);
+    assert.equal(result.decision, "allow");
+    assert.equal(result.completed, true);
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "closed");
+    assert.equal(cur.activeTaskDir, null, "closed 态不存 active task");
+    assert.equal(cur.lastTask.dir, "docs/login-fix", "previous task 经显式 lastTask 保留");
+    assert.equal(cur.lastTask.reason, "completed");
+    assert.equal(cur.lastTask.completed, true);
+    assert.equal(cur.lastTask.closureEvidence, "docs/login-fix/onlyAI/closure.json");
+
+    const closure = readJsonIfExists(path.join(root, "docs", "login-fix", "onlyAI", "closure.json"), null);
+    assert.ok(closure, "应写最终关闭证据 closure.json");
+    assert.equal(closure.reason, "completed");
+    assert.equal(closure.completed, true);
+    assert.deepEqual(closure.completion, { design: true, implement: true, test: true, debug: false });
+    assert.equal(closure.sessionId, sessionId, "关闭证据带当前 session id");
+    assert.equal(closure.sessionName, null, "session name 未知时记 null（if known）");
+    assert.equal(closure.diagnostics, "docs/_sdlc/session-diagnostics.json", "关闭证据含诊断引用");
+  }
+
+  // task.close --reason completed：证据不齐时拒绝关闭，任务保持活动、不写关闭证据。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    const result = closeTask({ reason: "completed" }, root);
+    assert.equal(result.decision, "deny");
+    assert.match(result.reason, /完成证据不齐/u);
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "design", "拒绝时不改阶段");
+    assert.equal(cur.activeTaskDir, "docs/login-fix", "拒绝时保留活动任务");
+    assert.ok(
+      !fs.existsSync(path.join(root, "docs", "login-fix", "onlyAI", "closure.json")),
+      "拒绝时不写关闭证据",
+    );
+  }
+
+  // task.close 非成功关闭（canceled/wontfix/superseded）：缺 --note 拒绝；带 note 可关闭未完成工作，
+  // 并在 lastTask 与关闭证据里保留 reason 与 note，completed=false。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "lite" });
+
+    const missingNote = closeTask({ reason: "canceled" }, root);
+    assert.equal(missingNote.decision, "deny");
+    assert.match(missingNote.reason, /需要 --note/u);
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "implement", "缺 note 时不关闭");
+
+    const closed = closeTask({ reason: "wontfix", note: "上游已修复" }, root);
+    assert.equal(closed.decision, "allow");
+    assert.equal(closed.completed, false, "非成功关闭 completed=false");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "closed");
+    assert.equal(cur.activeTaskDir, null);
+    assert.equal(cur.lastTask.reason, "wontfix");
+    assert.equal(cur.lastTask.note, "上游已修复");
+    assert.equal(cur.lastTask.completed, false);
+
+    const closure = readJsonIfExists(path.join(root, "docs", "login-fix", "onlyAI", "closure.json"), null);
+    assert.equal(closure.reason, "wontfix");
+    assert.equal(closure.note, "上游已修复");
+    assert.equal(closure.completed, false);
+  }
+
+  // task.close 边界：无活动任务 / 非法或缺失 reason 一律拒绝。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { activeTaskDir: null, phase: "closed" });
+    assert.equal(closeTask({ reason: "completed" }, root).decision, "deny", "无活动任务不可关闭");
+
+    const root2 = makeWorkspace();
+    seedCurrent(root2, { phase: "test", profile: "lite" });
+    assert.equal(closeTask({ reason: "bogus" }, root2).decision, "deny", "非法 reason 拒绝");
+    assert.equal(closeTask({}, root2).decision, "deny", "缺 reason 拒绝");
+  }
+
+  // closed 终端态门禁：任务专属门禁全部失效（源码编辑放行），但全局红线仍 block。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { activeTaskDir: null, phase: "closed" });
+
+    const sourceEdit = evaluate(
+      { name: "tool.before", platform: "test", action: "fs.edit", targetPaths: ["src/whatever.ts"] },
+      { cwd: root },
+    );
+    assert.equal(sourceEdit.decision, "allow", "closed 态任务门禁失效，源码编辑放行");
+
+    const pushMain = evaluate(
+      { name: "tool.before", platform: "test", action: "command.exec", command: "git push origin main" },
+      { cwd: root },
+    );
+    assert.equal(pushMain.decision, "deny", "closed 态全局红线仍生效（push 主分支被拦）");
+
+    const delConfig = evaluate(
+      { name: "tool.before", platform: "test", action: "fs.delete", targetPaths: ["package.json"] },
+      { cwd: root },
+    );
+    assert.equal(delConfig.decision, "deny", "closed 态删除核心配置仍被红线拦");
+  }
+
+  // closed 终端态 session 注入：只说“上个任务已关闭 + 如何初始化新任务”，不复述活动任务门禁那段。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, {
+      activeTaskDir: null,
+      phase: "closed",
+      lastTask: { dir: "docs/login-fix", reason: "completed" },
+    });
+    const result = evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    assert.equal(result.decision, "allow");
+    const ctx = result.additionalContext || "";
+    assert.match(ctx, /已关闭/u, "closed 注入应说明上个任务已关闭");
+    assert.match(ctx, /init --task-dir/u, "closed 注入应给出初始化新任务的命令");
+    assert.doesNotMatch(ctx, /当前任务：/u, "closed 注入不复述活动任务那一行");
   }
 }
 
