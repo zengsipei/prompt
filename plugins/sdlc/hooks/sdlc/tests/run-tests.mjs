@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { evaluate } from "../core/rules.mjs";
 import { allow, asCodexHookJson, asHookJson, block, codexHookFailureJson, hookFailureJson, warn } from "../core/result.mjs";
 import { eventsPath, hookStatePath, readJsonIfExists, writeJson } from "../core/context.mjs";
+import { currentSessionId, diagnosticsPath, sessionPath } from "../core/session.mjs";
 import {
   implementationAllowedPaths,
   inferAllowedPathsFromGit,
@@ -252,6 +253,107 @@ function run() {
     const result = evaluate({ name: "session.start", platform: "test" }, { cwd: root });
     assert.equal(result.decision, "allow");
     assert.equal(readEvents(root), "");
+  }
+
+  // session.start 建立轻量会话记录（active-task 状态），即便事件流默认不记。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement" });
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+
+    const session = readJsonIfExists(sessionPath(root), null);
+    assert.ok(session, "session.start 应写 docs/_sdlc/session.json");
+    assert.ok(typeof session.sessionId === "string" && session.sessionId.length > 0, "应生成 sessionId");
+    assert.equal(session.active, true);
+    assert.equal(session.activeTaskDir, "docs/login-fix");
+    assert.equal(session.phase, "implement");
+    // 仅建会话记录，不写事件流（与上面的默认不记一致）。
+    assert.equal(readEvents(root), "");
+  }
+
+  // idle/closed 状态：session.start 仍建会话记录，但标记 inactive，不复活上一个任务。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { activeTaskDir: null, phase: "closed" });
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+
+    const session = readJsonIfExists(sessionPath(root), null);
+    assert.ok(session, "idle/closed 也应建会话记录");
+    assert.ok(session.sessionId.length > 0);
+    assert.equal(session.active, false);
+    assert.equal(session.activeTaskDir, null);
+    assert.equal(session.phase, "closed");
+  }
+
+  // 后续事件归属到当前 session，写紧凑结构化摘要；完整长诊断分流到 session-diagnostics.json。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test" });
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const sessionId = currentSessionId(root);
+    assert.ok(sessionId, "session.start 后应能读到当前 session id");
+
+    evaluate(
+      { name: "tool.before", platform: "test", action: "fs.edit", targetPaths: ["src/login.ts", "src/auth.ts"] },
+      { cwd: root },
+    );
+
+    const lines = readEvents(root).trim().split("\n").filter(Boolean);
+    const last = JSON.parse(lines[lines.length - 1]);
+    assert.equal(last.event, "tool.before");
+    assert.equal(last.sessionId, sessionId, "事件应携带当前 session id");
+    assert.equal(last.pathCount, 2, "紧凑摘要用 pathCount 取代完整 targetPaths");
+    assert.equal(last.detail, "docs/_sdlc/session-diagnostics.json", "事件流应指向详细诊断位置");
+    assert.equal(last.targetPaths, undefined, "事件流不再内联完整路径");
+    assert.equal(last.message, undefined, "事件流不再写长 message");
+    assert.equal(typeof last.summary, "string");
+
+    const diag = readJsonIfExists(diagnosticsPath(root), null);
+    assert.ok(diag, "应写 docs/_sdlc/session-diagnostics.json");
+    assert.equal(diag.latest.event, "tool.before");
+    assert.equal(diag.latest.sessionId, sessionId);
+    assert.deepEqual(diag.latest.targetPaths, ["src/login.ts", "src/auth.ts"], "详细诊断保留完整路径");
+    assert.ok(typeof diag.latest.message === "string" && diag.latest.message.length > 0, "详细诊断保留完整 message");
+    assert.ok(Array.isArray(diag.history) && diag.history.length >= 1);
+    assert.equal(diag.history[0].event, "tool.before", "history 最新在前");
+  }
+
+  // 诊断 history 是「小滚动历史」：超过上限只留最近 N 条，且 latest / history[0] 是最新一条。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test" });
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    for (let i = 0; i < 25; i += 1) {
+      evaluate(
+        { name: "tool.after", platform: "test", action: "fs.edit", targetPaths: [`src/file-${i}.ts`], success: true },
+        { cwd: root },
+      );
+    }
+
+    const diag = readJsonIfExists(diagnosticsPath(root), null);
+    assert.ok(diag.history.length <= 20, "history 不应无界增长");
+    assert.equal(diag.latest.targetPaths[0], "src/file-24.ts", "latest 是最近一条");
+    assert.equal(diag.history[0].targetPaths[0], "src/file-24.ts", "history 倒序，最新在前");
+  }
+
+  // 新的 session.start 生成新 session id，后续事件归属切换到新会话。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test" });
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const first = currentSessionId(root);
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const second = currentSessionId(root);
+    assert.ok(first && second, "两次 session.start 都应有 id");
+    assert.notEqual(first, second, "每个 session.start 是一个新会话");
+
+    evaluate(
+      { name: "tool.after", platform: "test", action: "fs.edit", targetPaths: ["src/x.ts"], success: true },
+      { cwd: root },
+    );
+    const lines = readEvents(root).trim().split("\n").filter(Boolean);
+    const last = JSON.parse(lines[lines.length - 1]);
+    assert.equal(last.sessionId, second, "事件应归属到最新会话");
   }
 
   // 未初始化项目：全局 hook 被触发也直接 no-op，不注入、不拦截、不写 docs/_sdlc。

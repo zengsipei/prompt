@@ -145,9 +145,21 @@ export function saveHookState(state, data, root = workspaceRoot()) {
   });
 }
 
-export function recordEvent(event, result, root = workspaceRoot()) {
+// 紧凑事件摘要：取首行并截断；完整长诊断分流到 session-diagnostics.json。
+function compactMessage(message, max = 160) {
+  if (!message) {
+    return "";
+  }
+  const firstLine = String(message).split("\n", 1)[0].trim();
+  return firstLine.length > max ? `${firstLine.slice(0, max - 1)}…` : firstLine;
+}
+
+// 事件流写紧凑结构化摘要：保留可扫描的结构字段 + sessionId 归属 + detail 指针，
+// 不再写多行长诊断（那部分由 session.mjs 的 recordDiagnostics 落到 session-diagnostics.json）。
+export function recordEvent(event, result, root = workspaceRoot(), sessionId = null) {
   appendNdjson(eventsPath(root), {
     at: new Date().toISOString(),
+    sessionId: sessionId || null,
     event: event.name,
     rawEventName: event.rawEventName,
     platform: event.platform,
@@ -155,9 +167,10 @@ export function recordEvent(event, result, root = workspaceRoot()) {
     toolName: event.toolName,
     success: event.success,
     failureReason: event.failureReason,
-    targetPaths: event.targetPaths,
+    pathCount: Array.isArray(event.targetPaths) ? event.targetPaths.length : 0,
     decision: result.decision,
     severity: result.severity,
-    message: result.message || result.reason,
+    summary: compactMessage(result.message || result.reason),
+    detail: "docs/_sdlc/session-diagnostics.json",
   });
 }

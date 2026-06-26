@@ -17,6 +17,7 @@ import {
 import { allow, block, warn } from "./result.mjs";
 import { detectRedline } from "./redlines.mjs";
 import { hookCommand } from "./runtime.mjs";
+import { currentSessionId, diagnosticsEntry, recordDiagnostics, startSession } from "./session.mjs";
 
 const WRITE_ACTIONS = new Set(["fs.write", "fs.edit", "fs.delete"]);
 const KNOWN_SOURCE_EXTENSIONS = new Set([
@@ -91,6 +92,13 @@ export function evaluate(event, options = {}) {
   let result;
   switch (normalizedEvent.name) {
     case "session.start":
+      // 每个执行会话起点都建立轻量会话记录（active-task 与 idle/closed 都建），
+      // 后续事件据此归属。best-effort：telemetry 失败绝不阻断 hook 决策。
+      try {
+        startSession(root, state, normalizedEvent);
+      } catch {
+        // Session record is best-effort; never fail the hook on telemetry.
+      }
       result = allow("Injected SDLC lifecycle context.", {
         additionalContext: sessionContextMessage(state),
       });
@@ -129,7 +137,10 @@ export function evaluate(event, options = {}) {
 
   if (shouldRecordEvent(normalizedEvent, state)) {
     try {
-      recordEvent(normalizedEvent, result, root);
+      const sessionId = normalizedEvent.sessionId || currentSessionId(root);
+      // 事件流写紧凑摘要（含 sessionId 归属）；同一事件的完整长诊断分流到 session-diagnostics.json。
+      recordEvent(normalizedEvent, result, root, sessionId);
+      recordDiagnostics(root, diagnosticsEntry(normalizedEvent, result, sessionId));
     } catch {
       // Hook decisions must not fail just because telemetry cannot be written.
     }
