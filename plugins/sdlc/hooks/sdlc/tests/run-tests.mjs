@@ -13,7 +13,7 @@ import {
   phasePreconditionsUnmet,
 } from "../core/artifacts.mjs";
 import { loadRegistry, resolveStep } from "../core/registry.mjs";
-import { closeTask, statusPayload } from "../adapters/manual.mjs";
+import { closeDebug, closeTask, setPhase, statusPayload } from "../adapters/manual.mjs";
 import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
 import {
   GENERATE_HOOK_CONFIGS_COMMAND,
@@ -1162,6 +1162,112 @@ function run() {
     assert.match(ctx, /已关闭/u, "closed 注入应说明上个任务已关闭");
     assert.match(ctx, /init --task-dir/u, "closed 注入应给出初始化新任务的命令");
     assert.doesNotMatch(ctx, /当前任务：/u, "closed 注入不复述活动任务那一行");
+  }
+
+  // #11 debug 激活：phase.set --phase debug 显式把 debug 标记为 active 并记录激活元数据，
+  // 不靠文件名 / 日志推断。AC：进入 debug 阶段显式标记 debugActive。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "lite" });
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const sessionId = currentSessionId(root);
+
+    const result = setPhase({ phase: "debug" }, root);
+    assert.equal(result.decision, "allow");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "debug");
+    assert.equal(cur.debugActive, true, "进入 debug 阶段应显式置 debugActive=true");
+    assert.ok(cur.debugActivatedAt, "应记录 debug 激活时间");
+    assert.equal(cur.debugSessionId, sessionId, "应记录激活时的 session id");
+
+    // 切到别的阶段不应静默清除 debugActive（关闭必须显式经 debug.close）。
+    setPhase({ phase: "implement" }, root);
+    const afterSwitch = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(afterSwitch.debugActive, true, "切换阶段不得静默关闭激活的 debug");
+  }
+
+  // #11 debug.close：缺 note / note 过短一律拒绝且保持 debugActive；有效 note 清除激活态并写 lastDebug。
+  // AC：debug.close 校验 note；清除 active debug 并记录 note、关闭时间与会话元数据。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "debug", profile: "lite", debugActive: true, debugActivatedAt: "2026-06-26T00:00:00.000Z" });
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const sessionId = currentSessionId(root);
+
+    const missing = closeDebug({}, root);
+    assert.equal(missing.decision, "deny", "缺 note 拒绝");
+    assert.match(missing.reason, /note/u);
+    assert.equal(readJsonIfExists(currentStatePath(root), null).debugActive, true, "缺 note 时 debug 仍激活");
+
+    const tooShort = closeDebug({ note: "ok" }, root);
+    assert.equal(tooShort.decision, "deny", "note 过短拒绝");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).debugActive, true, "过短时 debug 仍激活");
+
+    const closed = closeDebug({ note: "已定位并修复空指针解引用" }, root);
+    assert.equal(closed.decision, "allow");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.ok(!cur.debugActive, "有效 note 后清除 debugActive");
+    assert.equal(cur.lastDebug.note, "已定位并修复空指针解引用");
+    assert.ok(cur.lastDebug.closedAt, "记录 debug 关闭时间");
+    assert.equal(cur.lastDebug.activatedAt, "2026-06-26T00:00:00.000Z", "保留激活时间");
+    assert.equal(cur.lastDebug.sessionId, sessionId, "记录会话元数据 session id");
+  }
+
+  // #11 debug.close 边界：未激活 debug 时拒绝（无可关闭的排查）。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    const result = closeDebug({ note: "无关紧要的说明" }, root);
+    assert.equal(result.decision, "deny", "未激活 debug 不可 debug.close");
+  }
+
+  // #11 task.close --reason completed 被 active debug 拦截：即便完成证据齐全，也必须先关 debug。
+  // AC：completed close 在 debug 激活时被拦并提示先关 debug。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "debug", profile: "lite", debugActive: true });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done" }],
+    });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+
+    const blocked = closeTask({ reason: "completed" }, root);
+    assert.equal(blocked.decision, "deny", "debug 激活时 completed close 被拦");
+    assert.match(blocked.reason, /debug/u, "提示先关 debug");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.notEqual(cur.phase, "closed", "被拦时不进入 closed");
+    assert.equal(cur.debugActive, true, "被拦时 debug 仍激活");
+    assert.ok(
+      !fs.existsSync(path.join(root, "docs", "login-fix", "onlyAI", "closure.json")),
+      "被拦时不写关闭证据",
+    );
+
+    // 显式关掉 debug 后，同一任务可成功完成关闭。
+    closeDebug({ note: "排查完毕，根因已修复" }, root);
+    const ok = closeTask({ reason: "completed" }, root);
+    assert.equal(ok.decision, "allow", "关掉 debug 后 completed close 放行");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "closed");
+  }
+
+  // #11 非成功关闭可在 debug 激活时关闭，但需保留“关闭时 debug 仍激活”的事实。
+  // AC：非成功 close 可带 active debug 关闭并保留 debugActiveAtClose。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "debug", profile: "lite", debugActive: true });
+
+    const closed = closeTask({ reason: "canceled", note: "需求取消，排查中止" }, root);
+    assert.equal(closed.decision, "allow", "非成功关闭允许在 debug 激活时关闭");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "closed");
+    assert.equal(cur.lastTask.debugActiveAtClose, true, "lastTask 保留关闭时 debug 仍激活");
+    assert.ok(!cur.debugActive, "关闭后清除 debug 激活态");
+
+    const closure = readJsonIfExists(path.join(root, "docs", "login-fix", "onlyAI", "closure.json"), null);
+    assert.equal(closure.debugActiveAtClose, true, "关闭证据保留 debug 仍激活的事实");
   }
 }
 

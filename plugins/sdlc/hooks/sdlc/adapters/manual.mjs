@@ -84,7 +84,12 @@ export function runManual(argv = process.argv.slice(2)) {
 
   // 仪式吸收进 skill：phase.set 是主入口，phase.enter 作别名——都只“设阶段 + 软提示”，不再硬门禁。
   if (command === "phase.set" || command === "phase.enter") {
-    return setPhase(args, root);
+    const result = setPhase(args, root);
+    printJson(result);
+    if (result.decision === "deny") {
+      process.exitCode = 2;
+    }
+    return;
   }
 
   if (command === "phase.exit") {
@@ -145,6 +150,17 @@ export function runManual(argv = process.argv.slice(2)) {
     return;
   }
 
+  // 显式关闭 debug：debug 是条件阶段，仅在显式激活后参与关闭判定。
+  // 关闭需 --note（短即可），清除激活态并记录排查结论与会话元数据。
+  if (command === "debug.close") {
+    const result = closeDebug(args, root);
+    printJson(result);
+    if (result.decision === "deny") {
+      process.exitCode = 2;
+    }
+    return;
+  }
+
   return help();
 }
 
@@ -176,12 +192,13 @@ function initLifecycle(args, root) {
   });
 }
 
-function setPhase(args, root) {
+// phase.set / phase.enter：设阶段 + 软提示。返回 result（不 printJson），供 runManual 与测试共用同一 seam。
+// 进入 debug 阶段时显式置 debugActive=true 并记录激活元数据——debug 激活态必须显式声明，
+// 不得从文件名 / 日志 / 偶发文本推断；切换到别的阶段不会静默清除（关闭须显式经 debug.close）。
+export function setPhase(args, root) {
   const raw = readJsonIfExists(currentStatePath(root), null);
   if (!raw) {
-    printJson({ decision: "deny", reason: "Lifecycle not initialized; run init first." });
-    process.exitCode = 2;
-    return;
+    return block("Lifecycle not initialized; run init first.");
   }
 
   const target = args.phase;
@@ -189,19 +206,26 @@ function setPhase(args, root) {
     throw new Error("phase.set requires --phase design|implement|test|debug");
   }
 
-  writeJson(currentStatePath(root), { ...raw, phase: target });
+  const nextState = { ...raw, phase: target };
+  if (target === "debug" && !raw.debugActive) {
+    const sessionRecord = readJsonIfExists(sessionPath(root), null);
+    nextState.debugActive = true;
+    nextState.debugActivatedAt = new Date().toISOString();
+    nextState.debugSessionId = sessionRecord?.sessionId || currentSessionId(root) || null;
+  }
+  writeJson(currentStatePath(root), nextState);
 
   // 软提示（跳级 / 未满足前置）。phase.set 恒放行。
   const result = evaluate(
     { name: "phase.set", platform: "manual", phase: target },
     { cwd: root, state: loadCurrentState(root) },
   );
-  printJson({
+  return {
     decision: result.decision === "deny" ? "deny" : "allow",
     phase: target,
     severity: result.severity,
     message: result.message || result.reason,
-  });
+  };
 }
 
 function scopeInfer(root) {
@@ -278,6 +302,8 @@ export function statusPayload(root) {
 const CLOSE_REASONS = ["completed", "canceled", "wontfix", "superseded"];
 const SUCCESSFUL_CLOSE_REASON = "completed";
 const SUCCESS_EVIDENCE_PHASES = ["design", "implement", "test"];
+// debug.close 的 note 最短长度（去空白后）。note 必填、可短，但不接受空 / 过短的占位。
+const DEBUG_NOTE_MIN_LENGTH = 4;
 
 // 显式关闭活动任务，把生命周期推入 closed 终端态。
 // 返回 result（不 printJson），供 runManual 与运行时测试共用同一高层 seam。
@@ -296,8 +322,20 @@ export function closeTask(args = {}, root = workspaceRoot()) {
   const completion = phaseCompletion(state, root);
   const pending = pendingConfirmations(state, root);
   const completed = reason === SUCCESSFUL_CLOSE_REASON;
+  // 关闭时 debug 是否仍激活——非成功关闭允许带 active debug 关闭，但须把这一事实记进最终证据。
+  const debugActiveAtClose = Boolean(state.debugActive);
 
   if (completed) {
+    // debug 是条件关闭门：completed 收尾不得静默关闭未结的排查。debug 激活则先 block，要求显式 debug.close。
+    if (debugActiveAtClose) {
+      return block(
+        [
+          "task.close --reason completed 被拒：debug 仍处于激活态，完成收尾不得静默关闭未结的排查。",
+          "先 `sdlc-hook debug.close --note <排查结论>` 显式关闭 debug，再重试 completed 关闭。",
+        ].join("\n"),
+      );
+    }
+
     // 成功关闭：design/implement/test 证据齐全且无待确认，否则拒绝并保持任务活动。
     const missing = SUCCESS_EVIDENCE_PHASES.filter((phase) => !completion[phase]);
     if (missing.length > 0 || pending.length > 0) {
@@ -339,6 +377,7 @@ export function closeTask(args = {}, root = workspaceRoot()) {
     note,
     completed,
     completion,
+    debugActiveAtClose,
     pendingConfirmations: pending.map((item) => item.name),
     sessionId,
     sessionName,
@@ -350,6 +389,10 @@ export function closeTask(args = {}, root = workspaceRoot()) {
   // 杜绝把已关闭任务当成活动任务（PRD 核心风险）。保留全局配置（mode/strict/profile…）。
   const nextState = { ...state };
   delete nextState.compactSummary;
+  // 任务关闭即清除 debug 激活态（debugActiveAtClose 已固化进证据/lastTask，事实不丢失）。
+  delete nextState.debugActive;
+  delete nextState.debugActivatedAt;
+  delete nextState.debugSessionId;
   nextState.phase = "closed";
   nextState.activeTaskDir = null;
   nextState.lastTask = {
@@ -359,6 +402,7 @@ export function closeTask(args = {}, root = workspaceRoot()) {
     note,
     completed,
     completion,
+    debugActiveAtClose,
     sessionId,
     sessionName,
     closureEvidence: closureRelPath,
@@ -378,6 +422,55 @@ export function closeTask(args = {}, root = workspaceRoot()) {
       lastTask: nextState.lastTask,
       closureEvidence: closureRelPath,
     },
+  );
+}
+
+// 显式关闭 debug：清除激活态、记录排查结论与会话元数据。
+// debug 是条件阶段——仅在显式激活（phase.set --phase debug）后才需要、也才能被关闭。
+// 返回 result（不 printJson），与 closeTask 共用同一高层 seam，供运行时测试驱动。
+export function closeDebug(args = {}, root = workspaceRoot()) {
+  const state = loadCurrentState(root);
+  if (!state) {
+    return block("生命周期未初始化：debug.close 需要已初始化的项目。");
+  }
+  if (!state.debugActive) {
+    return block(
+      "当前没有处于激活态的 debug：先 `sdlc-hook phase.set --phase debug` 进入 debug 再 debug.close。",
+    );
+  }
+
+  const note = typeof args.note === "string" ? args.note.trim() : "";
+  if (note.length < DEBUG_NOTE_MIN_LENGTH) {
+    return block(
+      `debug.close 需要 --note <简短说明>（至少 ${DEBUG_NOTE_MIN_LENGTH} 字），用于记录排查结论；当前 note 缺失或过短。`,
+    );
+  }
+
+  const closedAt = new Date().toISOString();
+  const sessionRecord = readJsonIfExists(sessionPath(root), null);
+  const sessionId = sessionRecord?.sessionId || currentSessionId(root) || null;
+  const sessionName = sessionRecord?.sessionName || sessionRecord?.name || null;
+
+  // 清除激活态，把排查结论与会话元数据固化进 lastDebug（轻量、可独立审计）。
+  const nextState = { ...state };
+  delete nextState.debugActive;
+  delete nextState.debugActivatedAt;
+  delete nextState.debugSessionId;
+  nextState.lastDebug = {
+    note,
+    closedAt,
+    activatedAt: state.debugActivatedAt || null,
+    sessionId,
+    sessionName,
+  };
+  writeJson(currentStatePath(root), nextState);
+
+  return allow(
+    [
+      `debug 已关闭：${note}`,
+      "debug 激活态已清除；完成证据齐备后可 `sdlc-hook task.close --reason completed` 收尾。",
+    ].join("\n"),
+    { note, closedAt, lastDebug: nextState.lastDebug },
   );
 }
 
@@ -412,6 +505,7 @@ function help() {
       `${hookCommand()} session.stop --require-complete`,
       `${hookCommand()} task.close --reason completed`,
       `${hookCommand()} task.close --reason canceled|wontfix|superseded --note "原因"`,
+      `${hookCommand()} debug.close --note "排查结论"`,
     ],
   });
 }
