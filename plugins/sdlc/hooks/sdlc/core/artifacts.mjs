@@ -138,16 +138,31 @@ export function implementationTasksCompleted(state, root, buildDocText = "") {
   return allTasksCompleted(buildDocText);
 }
 
+// 完成态状态字符串集合：task-plan 任务计数与完成判定共用同一集合，避免漂移。
+const COMPLETED_TASK_STATUSES = ["done", "completed", "complete", "[x]", "已完成"];
+
+function isCompletedTaskStatus(task) {
+  const status = String(task?.status || "").trim().toLowerCase();
+  return COMPLETED_TASK_STATUSES.includes(status);
+}
+
 export function allTaskPlanTasksCompleted(taskPlan) {
   const tasks = Array.isArray(taskPlan?.tasks) ? taskPlan.tasks : [];
   if (tasks.length === 0) {
     return false;
   }
 
-  return tasks.every((task) => {
-    const status = String(task?.status || "").trim().toLowerCase();
-    return ["done", "completed", "complete", "[x]", "已完成"].includes(status);
-  });
+  return tasks.every(isCompletedTaskStatus);
+}
+
+// task-plan 任务进度计数：{ total, completed }。紧凑 status 与 compact runtime summary 共用，
+// 计数口径与 allTaskPlanTasksCompleted 同源（COMPLETED_TASK_STATUSES）。
+export function taskPlanProgress(taskPlan) {
+  const tasks = Array.isArray(taskPlan?.tasks) ? taskPlan.tasks : [];
+  return {
+    total: tasks.length,
+    completed: tasks.filter(isCompletedTaskStatus).length,
+  };
 }
 
 export function taskPlanDiagnostics(state, root) {

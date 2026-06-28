@@ -4,7 +4,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { evaluate } from "../core/rules.mjs";
 import { allow, asCodexHookJson, asHookJson, block, codexHookFailureJson, hookFailureJson, warn } from "../core/result.mjs";
-import { currentStatePath, eventsPath, hookStatePath, readJsonIfExists, writeJson } from "../core/context.mjs";
+import { currentStatePath, eventsPath, hookStatePath, loadCurrentState, readJsonIfExists, writeJson } from "../core/context.mjs";
 import { currentSessionId, diagnosticsPath, sessionPath } from "../core/session.mjs";
 import {
   implementationAllowedPaths,
@@ -14,6 +14,7 @@ import {
 } from "../core/artifacts.mjs";
 import { loadRegistry, resolveStep } from "../core/registry.mjs";
 import { closeDebug, closeTask, setPhase, statusPayload } from "../adapters/manual.mjs";
+import { DIAGNOSTICS_LOCATION, shortStatusMessage } from "../core/status.mjs";
 import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
 import {
   GENERATE_HOOK_CONFIGS_COMMAND,
@@ -381,7 +382,7 @@ function run() {
     assert.equal(fs.existsSync(path.join(root, "docs", "_sdlc")), false);
   }
 
-  // prompt.submit：只注入软指导并留痕，不阻断用户 prompt。
+  // prompt.submit：注入与 status --short 同源的紧凑视图（≤4 行）并留痕，不阻断用户 prompt。
   {
     const root = makeWorkspace();
     seedCurrent(root, { phase: "implement", profile: "standard" });
@@ -391,7 +392,10 @@ function run() {
 
     const result = evaluate({ name: "prompt.submit", platform: "test", rawEventName: "UserPromptSubmit" }, { cwd: root });
     assert.equal(result.decision, "allow");
-    assert.match(result.additionalContext, /advisory/u);
+    assert.ok(result.additionalContext.split("\n").length <= 4, "prompt 注入紧凑视图 ≤4 行");
+    assert.doesNotMatch(result.additionalContext, /advisory/u, "不再注入旧的多行 advisory guidance");
+    assert.match(result.additionalContext, /docs\/_sdlc\/session-diagnostics\.json/u, "紧凑视图含诊断位置");
+    assert.match(result.additionalContext, /docs\/login-fix/u, "紧凑视图含活动任务");
     assert.match(readEvents(root), /"event":"prompt.submit"/u);
   }
 
@@ -1162,6 +1166,8 @@ function run() {
     assert.match(ctx, /已关闭/u, "closed 注入应说明上个任务已关闭");
     assert.match(ctx, /init --task-dir/u, "closed 注入应给出初始化新任务的命令");
     assert.doesNotMatch(ctx, /当前任务：/u, "closed 注入不复述活动任务那一行");
+    assert.ok(ctx.split("\n").length <= 4, "closed 注入 ≤4 行");
+    assert.match(ctx, /docs\/_sdlc\/session-diagnostics\.json/u, "closed 注入含诊断位置");
   }
 
   // #11 debug 激活：phase.set --phase debug 显式把 debug 标记为 active 并记录激活元数据，
@@ -1406,6 +1412,94 @@ function run() {
     assert.equal(autoClosure.closeTrigger, "session.stop");
     assert.equal(autoClosure.autoClosed, true);
     assert.notEqual(autoClosure.note, manualClosure.note, "note 区分兜底来源");
+  }
+
+  // #13 紧凑 status / 注入：status --short 与 hook 注入同源紧凑视图（≤4 行），含任务/关闭状态、
+  // 下一步、紧凑计数、诊断位置；覆盖 active / incomplete / debug-active / complete / closed 五态。
+
+  // #13 active / incomplete：紧凑视图 ≤4 行，含任务、阶段、下一步、紧凑计数与诊断位置。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "standard" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "pending" }],
+    });
+
+    const msg = shortStatusMessage(loadCurrentState(root), root);
+    const lines = msg.split("\n");
+    assert.ok(lines.length <= 4, `active 紧凑视图 ≤4 行，实际 ${lines.length}`);
+    assert.match(msg, /任务 docs\/login-fix/u, "含活动任务");
+    assert.match(msg, /阶段 design/u, "含当前阶段");
+    assert.match(msg, /下一步：/u, "含下一步动作");
+    assert.match(msg, /任务 0\/1/u, "含紧凑任务计数");
+    assert.match(msg, /待确认 0/u, "含待确认计数");
+    assert.match(msg, new RegExp(DIAGNOSTICS_LOCATION.replace(/\//gu, "\\/"), "u"), "含诊断位置");
+    // incomplete：design 阶段产物未齐 → 下一步提示补齐当前阶段产物。
+    assert.match(msg, /Complete required artifacts for phase design/u, "incomplete 提示补齐当前阶段");
+  }
+
+  // #13 debug-active：紧凑视图标记 debug active，并提示先 debug.close。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "debug", profile: "lite", debugActive: true });
+
+    const msg = shortStatusMessage(loadCurrentState(root), root);
+    assert.ok(msg.split("\n").length <= 4, "debug-active 紧凑视图 ≤4 行");
+    assert.match(msg, /debug active/u, "标记 debug 激活态");
+    assert.match(msg, /debug\.close/u, "提示先显式关闭 debug");
+  }
+
+  // #13 complete：design/implement/test 证据齐全 → 下一步建议 task.close --reason completed。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done" }],
+    });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+
+    const msg = shortStatusMessage(loadCurrentState(root), root);
+    assert.ok(msg.split("\n").length <= 4, "complete 紧凑视图 ≤4 行");
+    assert.match(msg, /完成证据齐全/u, "证据齐全提示");
+    assert.match(msg, /task\.close --reason completed/u, "建议显式关闭任务");
+    assert.match(msg, /design✓ implement✓ test✓/u, "紧凑计数标记三阶段完成");
+  }
+
+  // #13 closed：紧凑视图只说上个任务已关闭 + 如何初始化新任务 + 诊断位置，≤4 行，不复述活动任务门禁。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, {
+      activeTaskDir: null,
+      phase: "closed",
+      lastTask: { dir: "docs/login-fix", reason: "completed" },
+    });
+
+    const msg = shortStatusMessage(loadCurrentState(root), root);
+    assert.ok(msg.split("\n").length <= 4, "closed 紧凑视图 ≤4 行");
+    assert.match(msg, /已关闭/u, "说明上个任务已关闭");
+    assert.match(msg, /docs\/login-fix/u, "保留上个任务目录");
+    assert.match(msg, /init --task-dir/u, "给出初始化新任务命令");
+    assert.match(msg, new RegExp(DIAGNOSTICS_LOCATION.replace(/\//gu, "\\/"), "u"), "含诊断位置");
+    assert.doesNotMatch(msg, /当前任务：/u, "不复述活动任务那一行");
+  }
+
+  // #13 status --short 与注入同源：UserPromptSubmit / SessionStart 注入文本 == shortStatusMessage。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const expected = shortStatusMessage(loadCurrentState(root), root);
+    const sessionStart = evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const promptSubmit = evaluate(
+      { name: "prompt.submit", platform: "test", rawEventName: "UserPromptSubmit" },
+      { cwd: root },
+    );
+    assert.equal(sessionStart.additionalContext, expected, "SessionStart 注入即 status --short 同源视图");
+    assert.equal(promptSubmit.additionalContext, expected, "UserPromptSubmit 注入即 status --short 同源视图");
+    assert.ok(sessionStart.additionalContext.split("\n").length <= 4, "SessionStart 注入 ≤4 行");
   }
 }
 

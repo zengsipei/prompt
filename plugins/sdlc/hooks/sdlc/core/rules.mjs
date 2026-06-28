@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { gateLevel, loadCurrentState, loadHookState, recordEvent, saveHookState, workspaceRoot } from "./context.mjs";
 import {
   implementationAllowedPaths,
@@ -13,12 +10,13 @@ import {
   phasePreconditionsUnmet,
   recordRequiredCapabilityResult,
   sdlcProfile,
+  taskPlanProgress,
 } from "./artifacts.mjs";
 import { allow, block, warn } from "./result.mjs";
 import { detectRedline } from "./redlines.mjs";
-import { hookCommand } from "./runtime.mjs";
 import { currentSessionId, diagnosticsEntry, recordDiagnostics, startSession } from "./session.mjs";
 import { completionEvidenceReady, performClose } from "./closure.mjs";
+import { shortStatusMessage } from "./status.mjs";
 
 const WRITE_ACTIONS = new Set(["fs.write", "fs.edit", "fs.delete"]);
 const KNOWN_SOURCE_EXTENSIONS = new Set([
@@ -46,57 +44,12 @@ const KNOWN_SOURCE_EXTENSIONS = new Set([
   ".vue",
 ]);
 
-const BOOTSTRAP_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bootstrap.md");
-
-function readBootstrap() {
-  try {
-    return fs.readFileSync(BOOTSTRAP_PATH, "utf8").trim();
-  } catch {
-    return "";
-  }
-}
-
-// closed 终端态的精简注入：只告知“上一个任务已关闭 + 如何初始化新任务”。
-// 刻意不复述完整 bootstrap / 当前任务门禁，避免 resume 把已关闭任务误当活动任务（PRD 核心风险）。
-function closedContextMessage(state) {
-  const last = state?.lastTask || null;
-  const reason = last?.reason ? `（原因：${last.reason}）` : "";
-  const lastDir = last?.dir || "上一个任务";
-  return [
-    `运行时：把 \`sdlc-hook\` 简写展开为 \`${hookCommand()}\``,
-    "",
-    `SDLC：上一个任务已关闭${reason}：${lastDir}。当前无活动任务（idle/closed）。`,
-    "开始新任务：`sdlc-hook init --task-dir docs/[task] --system [system] --profile lite|standard|full`。",
-    "全局红线仍生效；任务门禁会在初始化新任务后恢复，不沿用已关闭任务的边界。",
-  ].join("\n");
-}
-
-// SessionStart 注入：仅对已初始化项目注入共享 bootstrap 与当前生命周期状态。
-// 两端（Codex/Claude）同源交付——这是双端 bootstrap 的 SSOT。
-export function sessionContextMessage(state) {
-  // closed 终端态：只注入“上个任务已关闭 + 如何初始化新任务”，不复述完整 bootstrap 与任务门禁。
-  // 这是规避 PRD 核心风险（resume 把已关闭任务误当活动任务）的关键；全局红线仍由 hook 强制。
-  if (state?.phase === "closed") {
-    return closedContextMessage(state);
-  }
-
-  const lines = [];
-  const bootstrap = readBootstrap();
-  if (bootstrap) {
-    lines.push(bootstrap, "");
-  }
-
-  // 公布运行时根：bootstrap 与 skill 里的 `sdlc-hook X` 简写 = 下面这条真实可执行命令。
-  // 自解析，跨 dev / 全局(~/.claude) / 插件安装都对——取代旧的 <SDLC_RUNTIME> 占位符。
-  lines.push(`运行时：把 \`sdlc-hook\` 简写展开为 \`${hookCommand()}\``, "");
-
-  lines.push(
-    `当前任务：${state.activeTaskDir || "未设置"}　阶段：${state.phase || "未设置"}　profile：${state.profile || "standard"}`,
-    "流程顺序可偏离（软，会留痕）；红线 / 施工边界 / 待确认 / 项目声明的前置门禁会被硬拦。",
-    "不确定下一步 → 先看 `sdlc-hook status` 的 nextAction，或问 `/sdlc-ask`。",
-  );
-
-  return lines.join("\n");
+// SessionStart 注入：默认改为与 `status --short` 同源的紧凑视图（≤4 行），
+// 取代旧的长 bootstrap 复述，降低上下文开销（PRD AC：注入默认 ≤4 行）。
+// closed 终端态、未初始化、活动任务的分支都由 shortStatusMessage 统一处理；
+// 全局红线 / 施工边界 / 待确认仍由 tool / stop hook 硬强制，不依赖注入文本。
+export function sessionContextMessage(state, root = workspaceRoot()) {
+  return shortStatusMessage(state, root);
 }
 
 export function evaluate(event, options = {}) {
@@ -122,7 +75,7 @@ export function evaluate(event, options = {}) {
         // Session record is best-effort; never fail the hook on telemetry.
       }
       result = allow("Injected SDLC lifecycle context.", {
-        additionalContext: sessionContextMessage(state),
+        additionalContext: sessionContextMessage(state, root),
       });
       break;
     case "prompt.submit":
@@ -296,26 +249,10 @@ function evaluateBeforeTool(event, state, root) {
   return allow("SDLC lifecycle checks passed.");
 }
 
+// UserPromptSubmit 注入：与 SessionStart 同源的紧凑视图（≤4 行），取代旧的多行 prompt guidance。
+// 仅作上下文延续；硬强制仍由 tool / stop hook 负责。
 export function promptGuidanceMessage(state, root = workspaceRoot()) {
-  const summary = sdlcRuntimeSummary(state, root);
-  const lines = [
-    "SDLC prompt guidance (advisory, never a hard gate):",
-    `- Active task: ${summary.activeTaskDir || "unset"}`,
-    `- Phase: ${summary.phase || "unset"}`,
-  ];
-
-  if (summary.unmetPreconditions.length > 0) {
-    lines.push(`- Unmet preconditions: ${summary.unmetPreconditions.join("; ")}`);
-  } else {
-    lines.push("- Unmet preconditions: none detected");
-  }
-
-  if (summary.satisfiedCapabilities.length > 0) {
-    lines.push(`- Satisfied capabilities: ${summary.satisfiedCapabilities.join(", ")}`);
-  }
-
-  lines.push("Use this as context continuity only; tool and stop hooks remain responsible for hard enforcement.");
-  return lines.join("\n");
+  return shortStatusMessage(state, root);
 }
 
 function evaluatePreCompact(state, root) {
@@ -344,13 +281,7 @@ export function sdlcRuntimeSummary(state, root = workspaceRoot()) {
   const unmet = phasePreconditionsUnmet(state, root, state?.phase);
   const allowed = implementationAllowedPaths(state, root);
   const taskPlan = loadTaskPlan(state, root);
-  const taskCount = Array.isArray(taskPlan?.tasks) ? taskPlan.tasks.length : 0;
-  const completedTaskCount = Array.isArray(taskPlan?.tasks)
-    ? taskPlan.tasks.filter((task) => {
-        const status = String(task?.status || "").trim().toLowerCase();
-        return ["done", "completed", "complete", "[x]", "已完成"].includes(status);
-      }).length
-    : 0;
+  const { total: taskCount, completed: completedTaskCount } = taskPlanProgress(taskPlan);
 
   const unmetPreconditions = [];
   if (pending.length > 0) {

@@ -1,6 +1,6 @@
 # SDLC Bootstrap
 
-当前会话启用 hooks-first SDLC。**边界硬、流程软**：流程顺序可偏离（hooks warn + 留痕），声明的必做动作硬拦（hooks block）。完整流程、工具表、哲学在 skills 与 registry 里——本文件只是始终在 prompt 的薄入口，由 SessionStart 注入。
+当前会话启用 hooks-first SDLC。**边界硬、流程软**：流程顺序可偏离（hooks warn + 留痕），声明的必做动作硬拦（hooks block）。完整流程、工具表、哲学在 skills 与 registry 里——本文件是常驻薄入口。SessionStart / UserPromptSubmit 默认只注入 `status --short` 的紧凑视图（≤4 行）以省上下文；需要完整入口时读本文件或问 `/sdlc-ask`。
 
 ## 角色
 

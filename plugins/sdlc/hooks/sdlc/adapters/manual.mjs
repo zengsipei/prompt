@@ -26,12 +26,12 @@ import { effectiveFlow, loadRegistry, resolveStep } from "../core/registry.mjs";
 import { evaluate } from "../core/rules.mjs";
 import { allow, block, printJson } from "../core/result.mjs";
 import { hookCommand, RUNTIME_ROOT } from "../core/runtime.mjs";
+import { nextAction, shortStatusMessage } from "../core/status.mjs";
 import { currentSessionId, sessionPath } from "../core/session.mjs";
 import { CLOSE_REASONS, performClose, SUCCESS_EVIDENCE_PHASES, SUCCESSFUL_CLOSE_REASON } from "../core/closure.mjs";
 import { inferTargetPaths, parseArgs } from "./common.mjs";
 
-// 默认阶段顺序（软建议）：design-1/design-2 已合并为 design。
-const PHASE_ORDER = ["design", "implement", "test"];
+// 默认阶段顺序（软建议）：design-1/design-2 已合并为 design。下一步推断已下沉到 core/status.mjs。
 const PROFILE_ARTIFACTS = {
   lite: {
     design: ["onlyAI/task-plan.json"],
@@ -80,6 +80,11 @@ export function runManual(argv = process.argv.slice(2)) {
   }
 
   if (command === "status") {
+    // 默认输出完整机读 JSON；--short 输出与 hook 注入同源的紧凑人读视图（≤4 行）。
+    if (args.short === true) {
+      process.stdout.write(`${shortStatusMessage(loadCurrentState(root), root)}\n`);
+      return;
+    }
     return status(root);
   }
 
@@ -468,31 +473,6 @@ function help() {
       `${hookCommand()} debug.close --note "排查结论"`,
     ],
   });
-}
-
-function nextAction(state, completion, pending) {
-  if (!state) {
-    return "Initialize lifecycle with init --task-dir docs/[task] --system [system].";
-  }
-
-  if (pending.length > 0) {
-    return `Resolve pending confirmation: ${pending.map((item) => item.name).join(", ")}.`;
-  }
-
-  if (!completion[state.phase]) {
-    return `Complete required artifacts for phase ${state.phase}.`;
-  }
-
-  const currentIndex = PHASE_ORDER.indexOf(state.phase);
-  if (currentIndex >= 0 && currentIndex < PHASE_ORDER.length - 1) {
-    return `Enter next phase: ${PHASE_ORDER[currentIndex + 1]}.`;
-  }
-
-  if (state.phase === "test" && completion.test) {
-    return "Task lifecycle is complete; summarize results and keep knowledge in the task/system docs.";
-  }
-
-  return "Inspect current state and choose the next lifecycle command.";
 }
 
 function blockingReasons(state, root, completion, pending) {
