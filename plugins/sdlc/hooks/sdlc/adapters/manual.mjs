@@ -27,6 +27,7 @@ import { evaluate } from "../core/rules.mjs";
 import { allow, block, printJson } from "../core/result.mjs";
 import { hookCommand, RUNTIME_ROOT } from "../core/runtime.mjs";
 import { currentSessionId, sessionPath } from "../core/session.mjs";
+import { CLOSE_REASONS, performClose, SUCCESS_EVIDENCE_PHASES, SUCCESSFUL_CLOSE_REASON } from "../core/closure.mjs";
 import { inferTargetPaths, parseArgs } from "./common.mjs";
 
 // 默认阶段顺序（软建议）：design-1/design-2 已合并为 design。
@@ -298,10 +299,8 @@ export function statusPayload(root) {
   };
 }
 
-// 关闭原因：completed 为成功收尾；canceled/wontfix/superseded 为非成功收尾（需 close note）。
-const CLOSE_REASONS = ["completed", "canceled", "wontfix", "superseded"];
-const SUCCESSFUL_CLOSE_REASON = "completed";
-const SUCCESS_EVIDENCE_PHASES = ["design", "implement", "test"];
+// CLOSE_REASONS / SUCCESSFUL_CLOSE_REASON / SUCCESS_EVIDENCE_PHASES 与 performClose 下沉到
+// core/closure.mjs，供 task.close 与 session.stop 兜底关闭共用同一关闭核心（见上方 import）。
 // debug.close 的 note 最短长度（去空白后）。note 必填、可短，但不接受空 / 过短的占位。
 const DEBUG_NOTE_MIN_LENGTH = 4;
 
@@ -360,54 +359,15 @@ export function closeTask(args = {}, root = workspaceRoot()) {
     return block(`task.close --reason ${reason} 需要 --note <简短说明>，以记录未完成即关闭的缘由。`);
   }
 
-  const closedAt = new Date().toISOString();
-  const sessionRecord = readJsonIfExists(sessionPath(root), null);
-  const sessionId = sessionRecord?.sessionId || currentSessionId(root) || null;
-  // session name 为 best-effort：会话记录已有则采用，否则留 null（stop-time 命名属后续能力）。
-  const sessionName = sessionRecord?.sessionName || sessionRecord?.name || null;
-  const taskDir = state.activeTaskDir;
-  const diagnosticsRef = "docs/_sdlc/session-diagnostics.json";
-  const closureRelPath = `${taskDir}/onlyAI/closure.json`;
-
-  // 最终关闭证据：写进被关闭任务目录内，关闭后可独立审计而无需回读整个会话。
-  const closureEvidence = {
-    taskDir,
-    closedAt,
+  // 写最终关闭证据 + 转 closed 终端态：与 session.stop 兜底自动关闭共用 performClose 同一核心，
+  // 保证两条路径写入完全一致的关闭证据（trigger="manual" 标记来源；debugActiveAtClose 仍由核心固化）。
+  const { nextState, closureRelPath, taskDir } = performClose(state, root, {
     reason,
     note,
-    completed,
     completion,
-    debugActiveAtClose,
-    pendingConfirmations: pending.map((item) => item.name),
-    sessionId,
-    sessionName,
-    diagnostics: diagnosticsRef,
-  };
-  writeJson(path.join(root, taskDir, "onlyAI", "closure.json"), closureEvidence);
-
-  // 转入 closed 终端态：清空 activeTaskDir，previous task 仅经显式 lastTask 字段保留，
-  // 杜绝把已关闭任务当成活动任务（PRD 核心风险）。保留全局配置（mode/strict/profile…）。
-  const nextState = { ...state };
-  delete nextState.compactSummary;
-  // 任务关闭即清除 debug 激活态（debugActiveAtClose 已固化进证据/lastTask，事实不丢失）。
-  delete nextState.debugActive;
-  delete nextState.debugActivatedAt;
-  delete nextState.debugSessionId;
-  nextState.phase = "closed";
-  nextState.activeTaskDir = null;
-  nextState.lastTask = {
-    dir: taskDir,
-    closedAt,
-    reason,
-    note,
-    completed,
-    completion,
-    debugActiveAtClose,
-    sessionId,
-    sessionName,
-    closureEvidence: closureRelPath,
-  };
-  writeJson(currentStatePath(root), nextState);
+    pending,
+    trigger: "manual",
+  });
 
   return allow(
     [

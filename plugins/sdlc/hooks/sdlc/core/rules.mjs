@@ -18,6 +18,7 @@ import { allow, block, warn } from "./result.mjs";
 import { detectRedline } from "./redlines.mjs";
 import { hookCommand } from "./runtime.mjs";
 import { currentSessionId, diagnosticsEntry, recordDiagnostics, startSession } from "./session.mjs";
+import { completionEvidenceReady, performClose } from "./closure.mjs";
 
 const WRITE_ACTIONS = new Set(["fs.write", "fs.edit", "fs.delete"]);
 const KNOWN_SOURCE_EXTENSIONS = new Set([
@@ -530,6 +531,53 @@ function evaluateStop(event, state, root, options = {}) {
   const phase = event.phase || state.phase;
   const complete = phaseCompletion(state, root);
   const pending = pendingConfirmations(state, root);
+
+  // 兜底自动关闭（fallback auto-close）：design/implement/test 完成证据齐全且无待确认时，
+  // session.stop 自动以 completed 收尾。由完成证据驱动、与当前 phase 字符串无关（phase 即便不是
+  // test 也可关闭，AC1/AC2）；绝不臆造 canceled/wontfix/superseded（非成功收尾只能显式 task.close）。
+  if (state?.activeTaskDir) {
+    const evidence = completionEvidenceReady(state, root, { completion: complete, pending });
+    if (evidence.ready) {
+      // debug 仍激活：不自动关闭，只给简短提示要求显式 debug.close（AC4）。stop 不硬拦，仅留痕提示。
+      if (state.debugActive) {
+        return warn(
+          [
+            "完成证据齐全，但 debug 仍处于激活态：session.stop 不自动关闭任务。",
+            "先 `sdlc-hook debug.close --note <排查结论>` 显式关闭 debug，再 stop 即会自动收尾，",
+            "或随后 `sdlc-hook task.close --reason completed` 手动收尾。",
+          ].join("\n"),
+        );
+      }
+
+      // 证据齐全且无 active debug：以 completed 自动收尾，写与显式 completed close 一致的关闭证据
+      //（performClose 标记 trigger="session.stop" / autoClosed=true 以区分兜底来源，AC5）。
+      const closed = performClose(state, root, {
+        reason: "completed",
+        note: "session.stop 兜底自动关闭：完成证据齐全且无待确认 / active debug。",
+        completion: complete,
+        pending,
+        trigger: "session.stop",
+      });
+      // 同步本地 state 至 closed/null：使 evaluate 末尾的 saveHookState 跳过已关闭任务的 hook-state 写入；
+      // 全局事件审计（hook-events.ndjson / session-diagnostics.json）仍照常记录本次 stop。
+      state.phase = "closed";
+      state.activeTaskDir = null;
+      return allow(
+        [
+          `session.stop 兜底自动关闭已完成任务：${closed.taskDir}（completed）。`,
+          `最终关闭证据：${closed.closureRelPath}`,
+          "生命周期进入 closed：无活动任务，旧任务门禁不再生效（全局红线仍在）。",
+        ].join("\n"),
+        {
+          autoClosed: true,
+          closeReason: "completed",
+          completed: true,
+          lastTask: closed.nextState.lastTask,
+          closureEvidence: closed.closureRelPath,
+        },
+      );
+    }
+  }
 
   const notes = [];
   if (pending.length > 0) {

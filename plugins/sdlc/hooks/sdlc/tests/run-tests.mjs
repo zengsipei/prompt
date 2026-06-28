@@ -1269,6 +1269,144 @@ function run() {
     const closure = readJsonIfExists(path.join(root, "docs", "login-fix", "onlyAI", "closure.json"), null);
     assert.equal(closure.debugActiveAtClose, true, "关闭证据保留 debug 仍激活的事实");
   }
+
+  // #12 session.stop 兜底自动关闭（AC1）：design/implement/test 证据齐全且无待确认时，
+  // stop 自动以 completed 收尾，进入 closed 终端态、写最终关闭证据并标记 stop fallback 来源。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done" }],
+    });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const sessionId = currentSessionId(root);
+
+    const result = evaluate({ name: "session.stop", platform: "test" }, { cwd: root });
+    assert.equal(result.decision, "allow");
+    assert.equal(result.autoClosed, true, "证据齐全时 stop 兜底自动关闭");
+    assert.equal(result.completed, true);
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "closed", "自动关闭后进入 closed 终端态");
+    assert.equal(cur.activeTaskDir, null, "closed 态不存 active task");
+    assert.equal(cur.lastTask.dir, "docs/login-fix", "previous task 经显式 lastTask 保留");
+    assert.equal(cur.lastTask.reason, "completed");
+    assert.equal(cur.lastTask.completed, true);
+    assert.equal(cur.lastTask.closeTrigger, "session.stop", "lastTask 标记兜底来源");
+    assert.equal(cur.lastTask.autoClosed, true);
+
+    const closure = readJsonIfExists(path.join(root, "docs", "login-fix", "onlyAI", "closure.json"), null);
+    assert.ok(closure, "auto-close 写最终关闭证据 closure.json");
+    assert.equal(closure.reason, "completed", "兜底关闭不臆造非成功 reason");
+    assert.equal(closure.completed, true);
+    assert.equal(closure.closeTrigger, "session.stop", "关闭证据区分 stop fallback 来源");
+    assert.equal(closure.autoClosed, true);
+    assert.ok(closure.note && closure.note.length > 0, "auto-close note 区分兜底来源");
+    assert.equal(closure.sessionId, sessionId, "关闭证据带当前 session id");
+  }
+
+  // #12 由完成证据驱动、与 phase 字符串无关（AC2）：phase 仍是 implement，但证据齐全即可自动关闭。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done" }],
+    });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+
+    const result = evaluate({ name: "session.stop", platform: "test" }, { cwd: root });
+    assert.equal(result.autoClosed, true, "证据齐全则即便 phase!=test 也自动关闭（证据驱动而非 phase 驱动）");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "closed");
+    assert.equal(cur.lastTask.completed, true);
+  }
+
+  // #12 待确认未处理则不自动关闭（AC3）：保持任务活动、不写关闭证据。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done" }],
+    });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    // 未处理的待确认（无「状态：已处理」标记）：阻止自动关闭。
+    write(path.join(root, "docs", "login-fix", "001-概要设计-待确认.md"), "待确认事项，尚未处理。\n");
+
+    const result = evaluate({ name: "session.stop", platform: "test" }, { cwd: root });
+    assert.notEqual(result.autoClosed, true, "有未处理待确认时不自动关闭");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "test", "未自动关闭，任务保持活动");
+    assert.equal(cur.activeTaskDir, "docs/login-fix");
+    assert.ok(
+      !fs.existsSync(path.join(root, "docs", "login-fix", "onlyAI", "closure.json")),
+      "未自动关闭时不写关闭证据",
+    );
+  }
+
+  // #12 debug 激活则不自动关闭、只提示显式 debug.close（AC4）：stop 不硬拦，但给出 warning 提示。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite", debugActive: true });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done" }],
+    });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+
+    const result = evaluate({ name: "session.stop", platform: "test" }, { cwd: root });
+    assert.notEqual(result.autoClosed, true, "debug 激活时不自动关闭");
+    assert.equal(result.decision, "allow", "提示但不硬拦 stop");
+    assert.equal(result.severity, "warning");
+    assert.match(result.message, /debug\.close/u, "提示显式关闭 debug");
+
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "test", "debug 激活时 stop 不关闭任务");
+    assert.equal(cur.activeTaskDir, "docs/login-fix");
+    assert.equal(cur.debugActive, true, "debug 仍激活");
+    assert.ok(
+      !fs.existsSync(path.join(root, "docs", "login-fix", "onlyAI", "closure.json")),
+      "debug 激活时不写关闭证据",
+    );
+  }
+
+  // #12 auto-close 与显式 completed close 写「同结构」关闭证据（AC5）：仅 closeTrigger / autoClosed / note 区分来源。
+  {
+    const setup = (r) => {
+      seedCurrent(r, { phase: "test", profile: "lite" });
+      writeJson(path.join(r, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+        tasks: [{ id: "T-01", status: "done" }],
+      });
+      write(path.join(r, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    };
+
+    const manualRoot = makeWorkspace();
+    setup(manualRoot);
+    closeTask({ reason: "completed" }, manualRoot);
+    const manualClosure = readJsonIfExists(path.join(manualRoot, "docs", "login-fix", "onlyAI", "closure.json"), null);
+
+    const autoRoot = makeWorkspace();
+    setup(autoRoot);
+    evaluate({ name: "session.stop", platform: "test" }, { cwd: autoRoot });
+    const autoClosure = readJsonIfExists(path.join(autoRoot, "docs", "login-fix", "onlyAI", "closure.json"), null);
+
+    assert.deepEqual(
+      Object.keys(autoClosure).sort(),
+      Object.keys(manualClosure).sort(),
+      "auto-close 与显式关闭写同结构关闭证据",
+    );
+    assert.equal(autoClosure.reason, manualClosure.reason, "两者 reason 都是 completed");
+    assert.equal(autoClosure.reason, "completed");
+    assert.equal(autoClosure.completed, true);
+    assert.deepEqual(autoClosure.completion, manualClosure.completion, "完成证据一致");
+    // 仅来源标记不同。
+    assert.equal(manualClosure.closeTrigger, "manual");
+    assert.equal(manualClosure.autoClosed, false);
+    assert.equal(autoClosure.closeTrigger, "session.stop");
+    assert.equal(autoClosure.autoClosed, true);
+    assert.notEqual(autoClosure.note, manualClosure.note, "note 区分兜底来源");
+  }
 }
 
 run();
