@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { loadHookState, readJsonIfExists, readTextIfExists, saveHookState, taskPath, toPosixPath } from "./context.mjs";
 import { loadRegistry, registryPhasePreconditions } from "./registry.mjs";
+import { hookCommand } from "./runtime.mjs";
 
 const CONFIRMATION_DONE_PATTERNS = [
   /(?:\*\*)?状态(?:\*\*)?[：:]\s*已处理/u,
@@ -365,6 +366,13 @@ export function phasePreconditionEvidenceLabel(precondition) {
   }
 
   return "unsupported precondition";
+}
+
+// 未满足前置门禁的「下一步命令」：抽出共用，避免 status / rules 两处重复并漂移（#16 复查）。
+// 有声明 step 时返回 `node "<root>/sdlc-hook.mjs" step <name>`，否则返回空串。
+export function preconditionStepCommand(precondition) {
+  const step = typeof precondition?.step === "string" && precondition.step.trim() ? precondition.step.trim() : "";
+  return step ? `${hookCommand()} step ${step}` : "";
 }
 
 export function requiredEvidenceSatisfied(state, root, precondition) {

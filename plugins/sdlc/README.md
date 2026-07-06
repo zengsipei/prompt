@@ -72,6 +72,8 @@ node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs status
 
 agent 应优先使用这些字段，避免反复检索历史文档。
 
+> **`completion.*` 是「产物完成」而非「阶段推进」**：`completion.design` / `completion.implement` / `completion.test` 只表示对应**产物**对当前任务目录与 profile 已存在/通过（例如 `003-文件改动记录.md`、`onlyAI/verification.md` 齐备），**不代表当前切片已正式进入或完成该阶段**。因此 `phase=implement` 但 `completion.test=true`（任务目录里早已有测试报告）时，`nextAction` 仍可能建议「进入 test」——这是基于产物完整度的下一步建议，与当前所在阶段并不矛盾。要看「我现在卡在哪」，以 `state.phase` 为准；要看「还差哪些产物」，看 `completion.*` 与 `blockingReasons`。`status` 还会在 `phasePreconditions` 列出未满足的硬前置门禁，未满足时 `nextAction` / `blockingReasons` 会直接点名缺什么（含任务相对证据路径）与下一步命令。
+
 ## 风险档位
 
 `profile` 控制必需产物和软门禁力度，不改变红线、待确认、项目前置门禁、implement 施工边界等硬约束。

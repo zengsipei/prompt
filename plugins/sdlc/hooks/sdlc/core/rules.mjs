@@ -8,6 +8,7 @@ import {
   phaseCompletion,
   phasePreconditionEvidenceLabel,
   phasePreconditionsUnmet,
+  preconditionStepCommand,
   recordRequiredCapabilityResult,
   sdlcProfile,
   taskPlanProgress,
@@ -419,9 +420,12 @@ function evaluatePhasePreconditions(state, root) {
   return block(
     [
       `当前阶段 ${state.phase} 有项目声明的前置门禁未满足：`,
-      ...unmet.map(
-        (item) => `- 需先提供 ${phasePreconditionEvidenceLabel(item)}${item.reason ? `（${item.reason}）` : ""}`,
-      ),
+      ...unmet.map((item) => {
+        const label = `需先提供 ${phasePreconditionEvidenceLabel(item)}${item.reason ? `（${item.reason}）` : ""}`;
+        const stepCommand = preconditionStepCommand(item);
+        const hint = stepCommand ? `\n下一步：${stepCommand}` : "";
+        return `- ${label}${hint}`;
+      }),
       "这是项目通过 registry 声明的硬约束，先完成前置动作再改源码。",
     ].join("\n"),
   );

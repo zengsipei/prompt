@@ -1,9 +1,13 @@
-import { workspaceRoot } from "./context.mjs";
+import { toPosixPath, workspaceRoot } from "./context.mjs";
 import { hookCommand } from "./runtime.mjs";
 import {
   loadTaskPlan,
   pendingConfirmations,
   phaseCompletion,
+  phasePreconditionEvidenceLabel,
+  phasePreconditionsUnmet,
+  preconditionStepCommand,
+  requiredCapabilityName,
   sdlcProfile,
   taskPlanProgress,
 } from "./artifacts.mjs";
@@ -18,13 +22,20 @@ const PHASE_ORDER = ["design", "implement", "test"];
 // 下一步动作：full status 与紧凑 status 共用同一判定，杜绝两套 next-step 漂移。
 // 证据驱动而非 phase 驱动——design/implement/test 证据齐全即建议 task.close（与 PRD 的关闭哲学一致），
 // debug 激活时先提示显式 debug.close。
-export function nextAction(state, completion, pending) {
+// 未满足的项目硬前置门禁优先于通用「补齐产物」文案：明确点名缺什么、下一步命令（#16）。
+export function nextAction(state, completion, pending, root) {
   if (!state) {
     return "Initialize lifecycle with init --task-dir docs/[task] --system [system].";
   }
 
   if (pending.length > 0) {
     return `Resolve pending confirmation: ${pending.map((item) => item.name).join(", ")}.`;
+  }
+
+  // 未满足的 phase 硬前置门禁优先于「补齐当前阶段产物」：直接点名缺的证据/能力 + 下一步命令。
+  const unmet = root ? phasePreconditionsUnmet(state, root, state.phase) : [];
+  if (unmet.length > 0) {
+    return unmet.map((item) => preconditionNextAction(item)).join(" ");
   }
 
   const evidenceReady = SUCCESS_EVIDENCE_PHASES.every((phase) => completion[phase]);
@@ -45,6 +56,24 @@ export function nextAction(state, completion, pending) {
   }
 
   return "Inspect current state and choose the next lifecycle command.";
+}
+
+// 单个未满足前置门禁的下一步文案：点名缺什么（证据路径 / 能力）+ 抽象步骤的查处命令（#16）。
+// required-evidence 直接写明任务相对证据路径；required-capability 写明能力名；两者都给出 `step <name>`。
+function preconditionNextAction(precondition) {
+  const stepCommand = preconditionStepCommand(precondition);
+  const stepHint = stepCommand ? `（${stepCommand}）` : "";
+
+  if (precondition?.enforcement === "required-evidence") {
+    const evidencePath =
+      precondition.evidence && typeof precondition.evidence.path === "string"
+        ? toPosixPath(precondition.evidence.path.trim())
+        : "file";
+    return `Provide required evidence ${evidencePath} before editing source.${stepHint}`;
+  }
+
+  const capability = requiredCapabilityName(precondition);
+  return `Run required capability ${capability || "tool"} before editing source.${stepHint}`;
 }
 
 function mark(done) {
@@ -87,8 +116,8 @@ export function shortStatusMessage(state, root = workspaceRoot()) {
   const progress = taskPlanProgress(loadTaskPlan(state, root));
   const debugFlag = state.debugActive ? "｜debug active" : "";
   const step = state.debugActive
-    ? `先 \`sdlc-hook debug.close --note <结论>\` 关闭排查；${nextAction(state, completion, pending)}`
-    : nextAction(state, completion, pending);
+    ? `先 \`sdlc-hook debug.close --note <结论>\` 关闭排查；${nextAction(state, completion, pending, root)}`
+    : nextAction(state, completion, pending, root);
 
   return [
     `SDLC｜任务 ${state.activeTaskDir || "未设置"}｜阶段 ${state.phase || "未设置"}${debugFlag}｜profile ${sdlcProfile(state)}`,

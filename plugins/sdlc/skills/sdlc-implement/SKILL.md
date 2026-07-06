@@ -20,7 +20,28 @@ sdlc-hook phase.set --phase implement
   sdlc-hook scope.infer   # 从 git diff 写入 task-plan.json
   ```
   也可在 `003-施工文档.md` 用反引号列出文件，或直接写进 `onlyAI/task-plan.json` 的 `allowedPaths`。改边界外文件会被硬拦（standard/full）；无声明时退化为只提示（lite/solo）。
-- **项目前置门禁**：若项目 registry 声明了 implement 前置（如「codegraph 检索待修改部分」），**必须先提供 required-evidence 证据**，否则源码编辑被硬拦。当前支持文件证据：路径相对当前任务目录，且文件必须存在并在去除空白后非空。`status` 的 `phasePreconditions` 列出未满足项。
+- **项目前置门禁**：若项目 registry 声明了 implement 前置（如「codegraph 检索待修改部分」），**必须先提供 required-evidence 证据**，否则源码编辑被硬拦。当前支持文件证据：路径相对当前任务目录，且文件必须存在并在去除空白后非空。`status` 的 `phasePreconditions` 列出未满足项。证据文件**由你自己写**，hooks 不会自动生成或填充；内容为空/纯空白视为未满足。
+
+  最小示例 `onlyAI/locate-code.md`（定位待改代码与相关调用点）：
+
+  ```md
+  # locate-code evidence
+
+  ## Tool / command
+
+  - <tool or command used>
+
+  ## Relevant hits
+
+  | Path | Why relevant |
+  | --- | --- |
+  | <file> | <reason> |
+
+  ## Decision
+
+  - Files to edit: <paths>
+  - Notes: <short rationale>
+  ```
 - **待确认**：有未处理待确认会硬拦——先回 `sdlc-design` 处理。
 
 `onlyAI/task-plan.json` 必须使用 `tasks[]`，每个任务必须有 `status`。完成状态只认：`done`、`completed`、`complete`、`[x]`、`已完成`。不要写成 `subtasks`。

@@ -14,7 +14,7 @@ import {
 } from "../core/artifacts.mjs";
 import { loadRegistry, resolveStep } from "../core/registry.mjs";
 import { closeDebug, closeTask, renameSession, setPhase, statusPayload } from "../adapters/manual.mjs";
-import { DIAGNOSTICS_LOCATION, shortStatusMessage } from "../core/status.mjs";
+import { DIAGNOSTICS_LOCATION, nextAction, shortStatusMessage } from "../core/status.mjs";
 import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
 import {
   GENERATE_HOOK_CONFIGS_COMMAND,
@@ -1605,6 +1605,186 @@ function run() {
     assert.equal(sessionStart.additionalContext, expected, "SessionStart 注入即 status --short 同源视图");
     assert.equal(promptSubmit.additionalContext, expected, "UserPromptSubmit 注入即 status --short 同源视图");
     assert.ok(sessionStart.additionalContext.split("\n").length <= 4, "SessionStart 注入 ≤4 行");
+  }
+
+  // #16 status guidance：未满足的 required-evidence 前置门禁让 status 直接点名证据路径与下一步命令。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-evidence",
+            evidence: { type: "file", path: "onlyAI/locate-code.md" },
+            reason: "codegraph 检索待修改部分",
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const payload = statusPayload(root);
+    assert.match(payload.nextAction, /onlyAI\/locate-code\.md/u, "nextAction 应点名缺的证据路径");
+    assert.match(payload.nextAction, /step locate-code/u, "nextAction 应给出下一步命令");
+    assert.ok(
+      payload.blockingReasons.some(
+        (reason) => /Unmet phase precondition/u.test(reason) && /onlyAI\/locate-code\.md/u.test(reason),
+      ),
+      `blockingReasons 应含清晰的未满足前置原因，got: ${payload.blockingReasons.join(" | ")}`,
+    );
+  }
+
+  // #16 紧凑视图：未满足前置时下一步直接点名证据路径，且仍 ≤4 行。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          { step: "locate-code", enforcement: "required-evidence", evidence: { type: "file", path: "onlyAI/locate-code.md" } },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const msg = shortStatusMessage(loadCurrentState(root), root);
+    assert.match(msg, /onlyAI\/locate-code\.md/u, "紧凑视图下一步应点名证据路径");
+    assert.ok(msg.split("\n").length <= 4, `紧凑视图应 ≤4 行，实际 ${msg.split("\n").length}`);
+  }
+
+  // #16 deny 可操作性：缺 required-evidence 时改源码被拒，且原因点名证据路径 + 下一步命令，保留硬拦说明。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-evidence",
+            evidence: { type: "file", path: "onlyAI/locate-code.md" },
+            reason: "codegraph 检索待修改部分",
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const blocked = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(blocked.decision, "deny");
+    assert.match(blocked.reason, /前置门禁/u, "保留硬拦说明");
+    assert.match(blocked.reason, /onlyAI\/locate-code\.md/u, "deny 原因应点名证据路径");
+    assert.match(blocked.reason, /step locate-code/u, "deny 原因应给出下一步命令");
+  }
+
+  // #16 证据保持真实：空白/空文件不构成满足；hooks 不自动生成证据文件（违反即破坏硬前置语义）。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          { step: "locate-code", enforcement: "required-evidence", evidence: { type: "file", path: "onlyAI/locate-code.md" } },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    write(path.join(root, "docs", "login-fix", "onlyAI", "locate-code.md"), "   \n\t  ");
+    assert.equal(
+      phasePreconditionsUnmet({ activeTaskDir: "docs/login-fix" }, root, "implement").length,
+      1,
+      "空白证据仍不满足",
+    );
+
+    fs.rmSync(path.join(root, "docs", "login-fix", "onlyAI", "locate-code.md"));
+    assert.equal(
+      phasePreconditionsUnmet({ activeTaskDir: "docs/login-fix" }, root, "implement").length,
+      1,
+      "删除证据文件后（未被自动重建）仍不满足",
+    );
+    assert.equal(
+      fs.existsSync(path.join(root, "docs", "login-fix", "onlyAI", "locate-code.md")),
+      false,
+      "hooks 不应自动创建证据文件",
+    );
+  }
+
+  // #16 required-capability 前置：未满足时 status 与 deny 都点名能力 + 步骤命令。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "implement", profile: "standard" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      phasePreconditions: {
+        implement: [
+          {
+            step: "locate-code",
+            enforcement: "required-capability",
+            capability: "semantic code search",
+            tools: ["codegraph"],
+            reason: "必须先成功使用语义检索",
+          },
+        ],
+      },
+    });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+
+    const payload = statusPayload(root);
+    assert.match(payload.nextAction, /semantic code search/u, "capability 前置 nextAction 点名能力");
+    assert.match(payload.nextAction, /step locate-code/u, "capability 前置 nextAction 给出步骤命令");
+    assert.ok(
+      payload.blockingReasons.some((reason) => /Unmet phase precondition/u.test(reason)),
+      `capability 前置 blockingReasons 应含未满足原因，got: ${payload.blockingReasons.join(" | ")}`,
+    );
+
+    const blocked = evaluate(event({ targetPaths: ["src/login.ts"] }), { cwd: root });
+    assert.equal(blocked.decision, "deny");
+    assert.match(blocked.reason, /semantic code search/u, "deny 点名能力");
+    assert.match(blocked.reason, /step locate-code/u, "deny 给出步骤命令");
+  }
+
+  // #16 completion 语义：completion.* 是「产物完成」而非「阶段推进」——phase=implement 但
+  // completion.implement=true 时 nextAction 仍按产物完整度推荐进入 test；既有测试产物
+  // （completion.test=true）同样只表示产物齐备，不改变当前所在阶段。两者都不矛盾。
+  {
+    const root = makeWorkspace();
+    const state = seedCurrent(root, { phase: "implement", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), {
+      tasks: [{ id: "T-01", status: "done", allowedPaths: ["src/login.ts"] }],
+    });
+    // 当前切片在 implement：无测试产物 → completion.test=false；任务计划完成 → completion.implement=true。
+    const completion = phaseCompletion(state, root);
+    assert.equal(completion.implement, true, "任务计划完成使 completion.implement=true（产物完成）");
+    assert.equal(completion.test, false, "尚无测试产物 → completion.test=false");
+    assert.equal(state.phase, "implement", "当前阶段仍是 implement（未切到 test）");
+    assert.match(
+      nextAction(state, completion, [], root),
+      /Enter next phase: test/u,
+      "phase=implement 且 completion.implement=true 时仍推荐进入 test，不与当前阶段矛盾（completion.* 是产物完成）",
+    );
+
+    // 既有测试产物（历史报告）使 completion.test=true：仍只表示产物齐备，不表示阶段已推进。
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    const completion2 = phaseCompletion(state, root);
+    assert.equal(completion2.test, true, "既有测试产物使 completion.test=true");
+    assert.equal(state.phase, "implement", "completion.test=true 不改变当前阶段（仍 implement）");
+    assert.match(
+      nextAction(state, completion2, [], root),
+      /task\.close --reason completed/u,
+      "completion.* 全齐备时建议关闭任务，仍与 phase=implement 不矛盾",
+    );
   }
 }
 

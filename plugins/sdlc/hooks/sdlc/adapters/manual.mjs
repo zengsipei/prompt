@@ -16,7 +16,10 @@ import {
   lifecycleDocPaths,
   loadTaskPlan,
   phaseCompletion,
+  phasePreconditionEvidenceLabel,
   phasePreconditionsUnmet,
+  preconditionStepCommand,
+  requiredCapabilityName,
   pendingConfirmations,
   sdlcProfile,
   taskPlanDiagnostics,
@@ -304,7 +307,7 @@ export function statusPayload(root) {
     pendingConfirmations: pending.map((item) => item.name),
     profile: sdlcProfile(state),
     runtimeRoot: RUNTIME_ROOT,
-    nextAction: nextAction(state, completion, pending),
+    nextAction: nextAction(state, completion, pending, root),
     blockingReasons: blockingReasons(state, root, completion, pending),
     requiredArtifacts: requiredArtifacts(state, root),
     recommendedReads: recommendedReads(state),
@@ -520,6 +523,20 @@ function blockingReasons(state, root, completion, pending) {
   if (!completion[state.phase]) {
     reasons.push(`Current phase ${state.phase} is incomplete.`);
     reasons.push(...taskPlanDiagnostics(state, root));
+  }
+  // 未满足的项目硬前置门禁：点名缺什么（含任务相对证据路径），便于 status 直接定位（#16）。
+  // required-capability 与 required-evidence 用不同措辞，避免把能力门禁误说成「提供证据」。
+  for (const item of phasePreconditionsUnmet(state, root, state.phase)) {
+    const label = phasePreconditionEvidenceLabel(item);
+    const detail =
+      item.enforcement === "required-capability"
+        ? `Run required capability ${requiredCapabilityName(item) || "tool"} before editing source`
+        : "Provide required evidence before editing source";
+    const stepCommand = preconditionStepCommand(item);
+    const hint = stepCommand ? `（${stepCommand}）` : "";
+    reasons.push(
+      `Unmet phase precondition: ${label}${item.reason ? ` (${item.reason})` : ""}. ${detail}.${hint}`,
+    );
   }
   return reasons;
 }

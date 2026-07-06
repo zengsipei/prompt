@@ -113,6 +113,20 @@ Phases are `design / implement / test / debug` (former design-1/design-2 are mer
 }
 ```
 
+`nextAction` is phase/artifact-aware: it surfaces unmet phase preconditions first
+(naming the missing evidence path and the next command, e.g. `sdlc-hook step
+locate-code`), then falls back to "complete required artifacts" or "enter next
+phase".
+
+> **`completion.*` is artifact completion, not phase progression.** `completion.design` /
+> `completion.implement` / `completion.test` mean the *required artifacts* for that
+> phase exist/pass for the active task directory and profile. They do **not** mean the
+> current slice has formally entered or completed that phase. So `phase=implement` with
+> `completion.test=true` (a prior test report already in the task directory) can still
+> yield `nextAction: "Enter next phase: test"` — this is artifact-driven guidance, not a
+> contradiction. Read `state.phase` for "where am I now" and `completion.*` /
+> `blockingReasons` for "what artifacts are still missing".
+
 Use `recommendedReads` before searching broadly. Use `allowedPaths` to avoid
 guessing the current implementation boundary.
 
