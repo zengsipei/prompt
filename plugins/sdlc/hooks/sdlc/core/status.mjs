@@ -12,6 +12,7 @@ import {
   taskPlanProgress,
 } from "./artifacts.mjs";
 import { SUCCESS_EVIDENCE_PHASES } from "./closure.mjs";
+import { autoAdvanceNextPhaseFromState, isAutoAdvanceApplicable } from "./autoAdvance.mjs";
 
 // 紧凑视图与关闭证据共用的诊断详情位置（详细 hook 诊断的 latest + 小滚动历史）。
 export const DIAGNOSTICS_LOCATION = "docs/_sdlc/session-diagnostics.json";
@@ -52,6 +53,14 @@ export function nextAction(state, completion, pending, root) {
 
   const currentIndex = PHASE_ORDER.indexOf(state.phase);
   if (currentIndex >= 0 && currentIndex < PHASE_ORDER.length - 1) {
+    // auto-advance 已启用且当前满足严格闸门（可立即执行）时，优先推荐 auto.advance；
+    // 否则保持既有 phase.set 手动引导（AC #9 / #11）。
+    if (root && isAutoAdvanceApplicable(state, root)) {
+      const target = autoAdvanceNextPhaseFromState(state, root);
+      if (target) {
+        return `运行 \`sdlc-hook auto.advance\` 自动推进到 ${target}（auto-advance 已启用且条件满足）。`;
+      }
+    }
     return `Enter next phase: ${PHASE_ORDER[currentIndex + 1]}.`;
   }
 

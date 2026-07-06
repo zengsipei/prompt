@@ -5,6 +5,7 @@ import {
   ensureDir,
   loadCurrentState,
   readJsonIfExists,
+  recordEvent,
   saveHookState,
   workspaceRoot,
   writeJson,
@@ -18,19 +19,20 @@ import {
   phaseCompletion,
   phasePreconditionEvidenceLabel,
   phasePreconditionsUnmet,
+  pendingConfirmations,
   preconditionStepCommand,
   requiredCapabilityName,
-  pendingConfirmations,
   sdlcProfile,
   taskPlanDiagnostics,
   taskPlanPath,
 } from "../core/artifacts.mjs";
-import { effectiveFlow, loadRegistry, resolveStep } from "../core/registry.mjs";
+import { effectiveAutoAdvance, effectiveFlow, loadRegistry, resolveStep, validateAutoAdvanceOrder } from "../core/registry.mjs";
 import { evaluate } from "../core/rules.mjs";
 import { allow, block, printJson } from "../core/result.mjs";
 import { hookCommand, RUNTIME_ROOT } from "../core/runtime.mjs";
 import { nextAction, shortStatusMessage } from "../core/status.mjs";
 import { applyManualRename, currentSessionId, sessionPath } from "../core/session.mjs";
+import { autoAdvanceNextPhaseFromState, evaluateAutoAdvanceGate } from "../core/autoAdvance.mjs";
 import { CLOSE_REASONS, performClose, SUCCESS_EVIDENCE_PHASES, SUCCESSFUL_CLOSE_REASON } from "../core/closure.mjs";
 import { inferTargetPaths, parseArgs } from "./common.mjs";
 
@@ -180,6 +182,17 @@ export function runManual(argv = process.argv.slice(2)) {
     return;
   }
 
+  // auto.advance：registry-gated 的阶段自动推进（issue #17）。默认只推进一阶段；
+  // --until-blocked 连续推进直到被严格闸门拒绝或生命周期完成。拒绝时 exit code 2 且不改 current.json。
+  if (command === "auto.advance") {
+    const result = autoAdvance(args, root);
+    printJson(result);
+    if (result.decision === "deny") {
+      process.exitCode = 2;
+    }
+    return;
+  }
+
   return help();
 }
 
@@ -301,6 +314,11 @@ export function statusPayload(root) {
   const state = loadCurrentState(root);
   const completion = phaseCompletion(state, root);
   const pending = pendingConfirmations(state, root);
+  // auto-advance 有效配置 + 配置合法性（AC #3：无效 order 在 status 暴露清晰配置错误）。
+  const autoAdvanceConfig = effectiveAutoAdvance(loadRegistry(root));
+  const autoAdvanceConfigError = validateAutoAdvanceOrder(autoAdvanceConfig.order);
+  const autoAdvanceApplicable =
+    state?.activeTaskDir && !autoAdvanceConfigError ? evaluateAutoAdvanceGate(state, root).allowed : false;
   return {
     state,
     completion,
@@ -314,6 +332,11 @@ export function statusPayload(root) {
     allowedPaths: allowedPaths(state, root),
     phasePreconditions: state ? phasePreconditionsUnmet(state, root, state.phase) : [],
     flow: effectiveFlow(loadRegistry(root)),
+    autoAdvance: {
+      ...autoAdvanceConfig,
+      configError: autoAdvanceConfigError,
+      applicable: autoAdvanceApplicable,
+    },
   };
 }
 
@@ -452,6 +475,102 @@ export function closeDebug(args = {}, root = workspaceRoot()) {
   );
 }
 
+// auto.advance：registry-gated 的阶段自动推进（issue #17）。
+// 返回 result（不 printJson），供 runManual 与运行时测试共用同一高层 seam。
+// 拒绝（含配置非法）时 decision:"deny"、不改 current.json、exit code 2；成功时写新相位并返回含
+// nextAction / recommendedReads 的更新状态上下文。每次尝试（成功或拒绝）都写审计事件到 hook-events.ndjson。
+export function autoAdvance(args = {}, root = workspaceRoot()) {
+  const state0 = loadCurrentState(root);
+  if (!state0 || !state0.activeTaskDir) {
+    return block("生命周期未初始化：auto.advance 需要已初始化的项目。");
+  }
+
+  const untilBlocked = args["until-blocked"] === true;
+  const trace = [];
+  let workingState = state0;
+  let lastDenied = null;
+
+  // 单步或 --until-blocked：循环推进直到严格闸门拒绝或已是末阶段。
+  // 即便 --until-blocked 也至少推进一次（闸门可用时）。
+  for (;;) {
+    const gate = evaluateAutoAdvanceGate(workingState, root);
+    if (!gate.allowed) {
+      lastDenied = gate;
+      break;
+    }
+
+    const from = workingState.phase;
+    const to = gate.target;
+    const nextState = advancePhaseState(workingState, to, root);
+    writeJson(currentStatePath(root), nextState);
+    recordAutoAdvanceEvent(from, to, "allow", root);
+    trace.push({ from, to, decision: "allow" });
+    workingState = loadCurrentState(root);
+
+    if (!untilBlocked) {
+      break;
+    }
+  }
+
+  // 零次推进 = 被拒绝：写拒绝审计、返回 deny、exit code 2、不改动 current.json。
+  if (trace.length === 0) {
+    const denyReason = lastDenied?.configError || lastDenied?.reason || "无法自动推进。";
+    recordAutoAdvanceEvent(state0.phase, null, "deny", root, denyReason);
+    return block(denyReason, {
+      advanced: false,
+      from: state0.phase,
+      to: null,
+      trace,
+      configError: lastDenied?.configError || undefined,
+    });
+  }
+
+  const finalState = loadCurrentState(root);
+  const completion = phaseCompletion(finalState, root);
+  const pending = pendingConfirmations(finalState, root);
+  const from = state0.phase;
+  const to = finalState.phase;
+  const message = untilBlocked
+    ? `auto.advance --until-blocked 推进 ${trace.length} 次：${trace.map((step) => `${step.from}→${step.to}`).join(", ")}。`
+    : `auto.advance 推进 ${from} → ${to}。`;
+  return allow(message, {
+    advanced: true,
+    from,
+    to,
+    trace,
+    nextAction: nextAction(finalState, completion, pending, root),
+    recommendedReads: recommendedReads(finalState),
+    state: finalState,
+  });
+}
+
+// 推进后的状态：写目标相位；若目标是 debug 则显式激活（与 phase.set --phase debug 一致），
+// 视为项目已把 debug 写进 autoAdvance.order 的显式 opt-in。
+function advancePhaseState(state, target, root) {
+  const nextState = { ...state, phase: target };
+  if (target === "debug" && !state.debugActive) {
+    const sessionRecord = readJsonIfExists(sessionPath(root), null);
+    nextState.debugActive = true;
+    nextState.debugActivatedAt = new Date().toISOString();
+    nextState.debugSessionId = sessionRecord?.sessionId || currentSessionId(root) || null;
+  }
+  return nextState;
+}
+
+// 审计事件：每次 auto.advance 尝试（成功 / 拒绝）都落 hook-events.ndjson，便于事后审计推进轨迹。
+function recordAutoAdvanceEvent(from, to, decision, root, reason = "") {
+  const event = {
+    name: "auto.advance",
+    platform: "manual",
+    action: "sdlc.phase.advance",
+    targetPaths: [],
+    fromPhase: from,
+    toPhase: to,
+  };
+  const result = decision === "allow" ? allow(`auto.advance ${from} → ${to}`) : block(reason || "auto.advance denied");
+  recordEvent(event, result, root, currentSessionId(root));
+}
+
 // 手动会话重命名：显式覆盖 session 名，best-effort 尝试平台 rename；返回平台 rename 反馈。
 // 返回 result（不 printJson），供 runManual 与运行时测试共用同一高层 seam（#14）。
 export function renameSession(args = {}, root = workspaceRoot()) {
@@ -507,6 +626,7 @@ function help() {
       `${hookCommand()} task.close --reason completed`,
       `${hookCommand()} task.close --reason canceled|wontfix|superseded --note "原因"`,
       `${hookCommand()} debug.close --note "排查结论"`,
+      `${hookCommand()} auto.advance [--until-blocked]`,
     ],
   });
 }
@@ -556,7 +676,7 @@ function requiredArtifacts(state, root) {
   });
 }
 
-function recommendedReads(state) {
+export function recommendedReads(state) {
   if (!state?.activeTaskDir) {
     return ["docs/_sdlc/current.json"];
   }

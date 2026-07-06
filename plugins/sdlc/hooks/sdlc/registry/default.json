@@ -55,5 +55,9 @@
     }
   },
   "phasePreconditions": {},
-  "order": ["design", "implement", "test", "debug"]
+  "order": ["design", "implement", "test", "debug"],
+  "autoAdvance": {
+    "enabled": false,
+    "order": ["design", "implement", "test"]
+  }
 }

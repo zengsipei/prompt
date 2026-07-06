@@ -12,9 +12,10 @@ import {
   phaseCompletion,
   phasePreconditionsUnmet,
 } from "../core/artifacts.mjs";
-import { loadRegistry, resolveStep } from "../core/registry.mjs";
-import { closeDebug, closeTask, renameSession, setPhase, statusPayload } from "../adapters/manual.mjs";
+import { loadRegistry, resolveStep, effectiveAutoAdvance, effectiveFlow, validateAutoAdvanceOrder } from "../core/registry.mjs";
+import { closeDebug, closeTask, renameSession, setPhase, statusPayload, autoAdvance, recommendedReads, runManual } from "../adapters/manual.mjs";
 import { DIAGNOSTICS_LOCATION, nextAction, shortStatusMessage } from "../core/status.mjs";
+import { autoAdvanceNextPhase, evaluateAutoAdvanceGate, isAutoAdvanceApplicable } from "../core/autoAdvance.mjs";
 import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
 import {
   GENERATE_HOOK_CONFIGS_COMMAND,
@@ -1787,6 +1788,324 @@ function run() {
     );
   }
 }
+
+  // ===== issue #17：SDLC auto.advance 阶段自动推进 =====
+
+  // #17 AC1：有效 registry 默认 autoAdvance = { enabled:false, order:[design,implement,test] }。
+  {
+    const root = makeWorkspace();
+    const aa = effectiveAutoAdvance(loadRegistry(root));
+    assert.equal(aa.enabled, false, "默认关闭");
+    assert.deepEqual(aa.order, ["design", "implement", "test"], "默认顺序不含 debug");
+  }
+
+  // #17 AC2：项目 registry 深合并 autoAdvance，{ enabled:true } 即启用默认顺序。
+  {
+    const root = makeWorkspace();
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+    const aa = effectiveAutoAdvance(loadRegistry(root));
+    assert.equal(aa.enabled, true, "项目只写 enabled:true 即启用");
+    assert.deepEqual(aa.order, ["design", "implement", "test"], "order 回退到默认");
+    // 项目可整体替换 order。
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      autoAdvance: { enabled: true, order: ["design", "implement", "test", "debug"] },
+    });
+    assert.deepEqual(effectiveAutoAdvance(loadRegistry(root)).order, ["design", "implement", "test", "debug"]);
+  }
+
+  // #17 AC3：非法 autoAdvance.order 暴露清晰配置错误，且 status / auto.advance 都拦截自动推进。
+  {
+    assert.equal(validateAutoAdvanceOrder(["design", "implement", "test"]), null);
+    assert.ok(validateAutoAdvanceOrder("nope"), "非数组应报错");
+    assert.ok(validateAutoAdvanceOrder([]), "空数组应报错");
+    assert.ok(validateAutoAdvanceOrder(["design", "bogus"]), "非法阶段应报错");
+    assert.ok(validateAutoAdvanceOrder(["design", "design"]), "重复阶段应报错");
+
+    // status 暴露 configError。
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      autoAdvance: { enabled: true, order: ["design", "bogus"] },
+    });
+    const payload = statusPayload(root);
+    assert.ok(payload.autoAdvance.configError, "status.autoAdvance 应暴露配置错误");
+    assert.equal(payload.autoAdvance.applicable, false, "配置非法时不可自动推进");
+
+    // auto.advance 拒绝并给出配置错误，且不改 current.json。
+    const result = autoAdvance({}, root);
+    assert.equal(result.decision, "deny", "非法 order 时自动推进被拒");
+    assert.ok(result.configError, "拒绝应携带 configError");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "design", "配置错误时不改相位");
+  }
+
+  // #17 AC6 严格闸门单元：逐条件验证（enabled / 合法 order / 当前阶段在顺序内 / 当前阶段完成 /
+  // 无待确认 / 存在目标 / 目标前置满足）。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+
+    // 全满足 → 可推进到 implement。
+    let gate = evaluateAutoAdvanceGate(loadCurrentState(root), root);
+    assert.equal(gate.allowed, true, "全条件满足时可推进");
+    assert.equal(gate.target, "implement");
+
+    // 未启用 → 拒绝。
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: false } });
+    gate = evaluateAutoAdvanceGate(loadCurrentState(root), root);
+    assert.equal(gate.allowed, false, "未启用时拒绝");
+    assert.match(gate.reason, /未启用/u);
+
+    // 重新启用，但当前阶段不在顺序内（debug 默认不在）→ 拒绝。
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+    seedCurrent(root, { phase: "debug", profile: "lite" });
+    gate = evaluateAutoAdvanceGate(loadCurrentState(root), root);
+    assert.equal(gate.allowed, false, "当前阶段不在顺序内时拒绝");
+    assert.match(gate.reason, /不在 auto-advance 顺序/u);
+  }
+
+  // #17 AC4/AC7/AC8：auto.advance 推进一阶段（enabled 且闸门通过），写新相位并返回含
+  // nextAction / recommendedReads 的更新状态上下文。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+
+    const result = autoAdvance({}, root);
+    assert.equal(result.decision, "allow", "design 完成且启用时推进");
+    assert.equal(result.from, "design");
+    assert.equal(result.to, "implement");
+    assert.equal(result.advanced, true);
+    assert.equal(result.trace.length, 1, "单步只推进一次");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "implement", "成功推进写新相位");
+    assert.ok(typeof result.nextAction === "string" && result.nextAction.length > 0, "返回 nextAction");
+    assert.ok(Array.isArray(result.recommendedReads) && result.recommendedReads.length > 0, "返回 recommendedReads");
+    assert.match(result.recommendedReads[0], /current\.json/u, "recommendedReads 含 current.json");
+  }
+
+  // #17 AC5：--until-blocked 连续推进已完成的阶段直到被拦 / 完成，返回完整推进轨迹。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    // design / implement / test 三者产物齐备 → 一次 --until-blocked 应推进 design→implement→test。
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+
+    const r = autoAdvance({ "until-blocked": true }, root);
+    assert.equal(r.decision, "allow");
+    assert.equal(r.trace.length, 2, "连续推进 2 次：design→implement→test");
+    assert.deepEqual(
+      r.trace.map((step) => `${step.from}->${step.to}`),
+      ["design->implement", "implement->test"],
+      "轨迹应记录每次推进",
+    );
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "test", "停在 test");
+
+    // 已是末阶段 → 不再推进，返回 deny（不改相位）。
+    const r2 = autoAdvance({ "until-blocked": true }, root);
+    assert.equal(r2.decision, "deny", "末阶段不再推进");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "test", "末阶段拒绝时不改相位");
+  }
+
+  // #17 AC5（续）：下一阶段未完成时 --until-blocked 只推进一次即停。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    // task-plan 存在且无 tasks → design 完成但 implement 未完成（tasksDone=false）。
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [] });
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+
+    const r = autoAdvance({ "until-blocked": true }, root);
+    assert.equal(r.decision, "allow");
+    assert.equal(r.trace.length, 1, "下一阶段未完成则只推进一次");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "implement");
+  }
+
+  // #17 AC7：被拒场景不修改 current.json、返回 decision:"deny"、exit code 2。每个子场景用独立工作区隔离。
+  {
+    // 未启用 → 拒绝、不改相位。
+    {
+      const root = makeWorkspace();
+      seedCurrent(root, { phase: "design", profile: "lite" });
+      writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+      const disabled = autoAdvance({}, root);
+      assert.equal(disabled.decision, "deny", "未启用时拒绝");
+      assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "design", "拒绝时不改相位");
+    }
+
+    // 启用，但当前阶段不在默认顺序内（debug）→ 拒绝、不改相位。
+    {
+      const root = makeWorkspace();
+      seedCurrent(root, { phase: "debug", profile: "lite" });
+      writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+      const debugDenied = autoAdvance({}, root);
+      assert.equal(debugDenied.decision, "deny", "debug 不在默认顺序时被拒");
+      assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "debug", "拒绝时不改相位");
+    }
+
+    // 当前阶段未完成 → 拒绝。
+    {
+      const root = makeWorkspace();
+      seedCurrent(root, { phase: "design", profile: "lite" });
+      writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+      // 无 task-plan → design 未完成。
+      const incompleteDenied = autoAdvance({}, root);
+      assert.equal(incompleteDenied.decision, "deny", "当前阶段未完成时被拒");
+      assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "design", "拒绝时不改相位");
+    }
+
+    // 待确认未处理 → 拒绝（用自定义顺序使 test 非末阶段且 test 完成独立于确认，方能触达 pending 分支）。
+    {
+      const root = makeWorkspace();
+      seedCurrent(root, { phase: "test", profile: "lite" });
+      write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+      writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+        autoAdvance: { enabled: true, order: ["design", "implement", "test", "debug"] },
+      });
+      write(path.join(root, "docs", "login-fix", "001-概要设计-待确认.md"), "待确认，未处理。\n");
+      const pendingDenied = autoAdvance({}, root);
+      assert.equal(pendingDenied.decision, "deny", "有待确认时被拒");
+      assert.match(pendingDenied.reason, /待确认/u);
+    }
+
+    // 目标阶段前置门禁未满足 → 拒绝。
+    {
+      const root = makeWorkspace();
+      seedCurrent(root, { phase: "design", profile: "lite" });
+      writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+      writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+        autoAdvance: { enabled: true },
+        phasePreconditions: {
+          implement: [{ step: "locate-code", enforcement: "required-evidence", evidence: { type: "file", path: "onlyAI/locate-code.md" } }],
+        },
+      });
+      const unmetDenied = autoAdvance({}, root);
+      assert.equal(unmetDenied.decision, "deny", "目标前置未满足时被拒");
+      assert.match(unmetDenied.reason, /前置门禁/u);
+    }
+
+    // runManual 路径：拒绝时 process.exitCode = 2。
+    {
+      const root = makeWorkspace();
+      seedCurrent(root, { phase: "design", profile: "lite" });
+      writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+      writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: false } });
+      const prevExit = process.exitCode;
+      const prevEnv = process.env.SDLC_WORKSPACE;
+      try {
+        process.env.SDLC_WORKSPACE = root;
+        runManual(["auto.advance"]);
+        assert.equal(process.exitCode, 2, "auto.advance 拒绝时 exit code 2");
+      } finally {
+        process.exitCode = prevExit;
+        if (prevEnv === undefined) delete process.env.SDLC_WORKSPACE;
+        else process.env.SDLC_WORKSPACE = prevEnv;
+      }
+    }
+  }
+
+  // #17 审计：每次 auto.advance 尝试（成功 / 拒绝）都写 hook-events.ndjson。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+
+    // 拒绝（未启用）。
+    autoAdvance({}, root);
+    let lines = readEvents(root).trim().split("\n").filter(Boolean);
+    let lastEvent = JSON.parse(lines[lines.length - 1]);
+    assert.equal(lastEvent.event, "auto.advance", "拒绝也写 auto.advance 审计");
+    assert.equal(lastEvent.decision, "deny");
+
+    // 启用后成功。
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+    autoAdvance({}, root);
+    lines = readEvents(root).trim().split("\n").filter(Boolean);
+    lastEvent = JSON.parse(lines[lines.length - 1]);
+    assert.equal(lastEvent.event, "auto.advance", "成功也写 auto.advance 审计");
+    assert.equal(lastEvent.decision, "allow");
+    assert.match(lastEvent.summary, /design → implement/u, "审计摘要含推进轨迹");
+  }
+
+  // #17 AC9：status.nextAction 在 auto-advance 启用且可立即执行时优先推荐 auto.advance；
+  // 未启用时保持既有 phase.set 引导。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    // task-plan 存在（design 完成），但 tasks 未完成 → design 完成、implement 未完成、非全证据齐备。
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "pending" }] });
+
+    // 未启用 → 推荐 Enter next phase（phase.set 引导）。
+    const disabled = shortStatusMessage(loadCurrentState(root), root);
+    assert.doesNotMatch(disabled, /auto\.advance/u, "未启用时不推荐 auto.advance");
+
+    const disabledNext = nextAction(loadCurrentState(root), phaseCompletion(loadCurrentState(root), root), [], root);
+    assert.match(disabledNext, /Enter next phase: implement/u, "未启用时保持 phase.set 引导");
+
+    // 启用且可立即执行 → 推荐 auto.advance。
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+    const enabledMsg = shortStatusMessage(loadCurrentState(root), root);
+    assert.match(enabledMsg, /auto\.advance/u, "启用且可立即执行时推荐 auto.advance");
+
+    const enabledNext = nextAction(loadCurrentState(root), phaseCompletion(loadCurrentState(root), root), [], root);
+    assert.match(enabledNext, /auto\.advance/u, "nextAction 优先 auto.advance");
+    assert.match(enabledNext, /implement/u, "点名目标阶段 implement");
+  }
+
+  // #17 AC10：registry show 与 status.flow 暴露有效 autoAdvance 配置。
+  {
+    const root = makeWorkspace();
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true, order: ["design", "implement"] } });
+
+    const flow = effectiveFlow(loadRegistry(root));
+    assert.ok(flow.autoAdvance, "effectiveFlow 含 autoAdvance");
+    assert.equal(flow.autoAdvance.enabled, true);
+    assert.deepEqual(flow.autoAdvance.order, ["design", "implement"]);
+
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    const payload = statusPayload(root);
+    assert.ok(payload.autoAdvance, "status.flow 含 autoAdvance");
+    assert.equal(payload.autoAdvance.enabled, true);
+    assert.deepEqual(payload.autoAdvance.order, ["design", "implement"]);
+  }
+
+  // #17 AC11：debug 默认不在自动顺序内；仅项目显式把 debug 写进 order 才经自动路径进入，且显式激活。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+
+    // 默认顺序：debug 不在内 → 即便所有产物齐备也无法经 auto.advance 进入 debug。
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), { autoAdvance: { enabled: true } });
+    const r = autoAdvance({ "until-blocked": true }, root);
+    assert.equal(r.decision, "allow");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "test", "默认顺序停在 test，不进 debug");
+
+    // 项目显式把 debug 写入 order → --until-blocked 可一路推进到 debug 并显式激活。
+    writeJson(path.join(root, "docs", "_sdlc", "registry.json"), {
+      autoAdvance: { enabled: true, order: ["design", "implement", "test", "debug"] },
+    });
+    const r2 = autoAdvance({ "until-blocked": true }, root);
+    assert.equal(r2.decision, "allow", "debug 在显式 order 内可推进");
+    const cur = readJsonIfExists(currentStatePath(root), null);
+    assert.equal(cur.phase, "debug", "经显式 opt-in 进入 debug");
+    assert.equal(cur.debugActive, true, "自动进入 debug 需显式激活");
+  }
+
+  // #17 AC11（续）：phase.set 手动逃生舱行为不变（仍恒放行 + 软提示，不因 auto.advance 变严格）。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design", profile: "standard" });
+    const result = setPhase({ phase: "implement" }, root);
+    assert.equal(result.decision, "allow", "phase.set 仍恒放行");
+    assert.equal(readJsonIfExists(currentStatePath(root), null).phase, "implement", "phase.set 仍写目标相位");
+    assert.equal(result.severity, "warning", "跳级仍给软提示（行为不变）");
+  }
 
 run();
 console.log("sdlc hooks tests passed");

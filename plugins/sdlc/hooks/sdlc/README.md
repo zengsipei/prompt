@@ -90,6 +90,8 @@ questions or planning-only turns.
 node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs init --task-dir docs/login-fix --system 用户中心 --profile lite
 node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs status
 node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs phase.set --phase implement
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs auto.advance
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs auto.advance --until-blocked
 node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs scope.infer
 node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs registry show
 node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs step locate-code
@@ -115,8 +117,64 @@ Phases are `design / implement / test / debug` (former design-1/design-2 are mer
 
 `nextAction` is phase/artifact-aware: it surfaces unmet phase preconditions first
 (naming the missing evidence path and the next command, e.g. `sdlc-hook step
-locate-code`), then falls back to "complete required artifacts" or "enter next
-phase".
+locate-code`), then—when auto-advance is enabled and immediately runnable—prefers
+`Run \`sdlc-hook auto.advance\``, and otherwise falls back to "complete required
+artifacts" or "enter next phase".
+
+## Auto-advance (`auto.advance`)
+
+`auto.advance` advances the active lifecycle phase only when the current phase is
+complete and the next is not blocked. It is a **registry-gated, explicit CLI
+command**—never an implicit hook side effect. The plugin ships the capability and
+default config, but actual phase mutation is disabled unless the effective
+registry explicitly sets `autoAdvance.enabled: true`.
+
+Registry key (deep-merged with the built-in default; default `autoAdvance`:
+
+```json
+{
+  "autoAdvance": {
+    "enabled": false,
+    "order": ["design", "implement", "test"]
+  }
+}
+```
+
+- `{ "autoAdvance": { "enabled": true } }` enables the **default** auto order
+  (deep merge keeps `order: [design, implement, test]`).
+- `order` is a non-empty, unique list of `design / implement / test / debug`.
+  Invalid `order` (unknown phase, duplicate, empty, non-array) surfaces a clear
+  config error in both `status` and `auto.advance`, and prevents automatic
+  advancement.
+- `debug` is **excluded** from the default path. It is an explicit exception
+  flow; only a project that opts in by listing `debug` in `autoAdvance.order`
+  can reach it automatically (and `auto.advance` then activates `debug` like a
+  manual `phase.set --phase debug`).
+
+Strict advance gate (all must hold): auto-advance enabled, valid order, current
+phase in order, current phase complete, no pending confirmations, a next phase
+exists, and all target-phase preconditions satisfied.
+
+```bash
+# advance exactly one phase (if the strict gate passes)
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs auto.advance
+# advance repeatedly through already-complete phases until blocked or lifecycle complete
+node <RUNTIME_ROOT>/hooks/sdlc/bin/sdlc-hook.mjs auto.advance --until-blocked
+```
+
+On success it writes the new phase to `docs/_sdlc/current.json` and returns the
+updated status context (`nextAction`, `recommendedReads`, `trace`). On denial it
+does **not** modify `current.json`, returns `decision: "deny"` (exit code `2`),
+and names the blocking reason. Every attempt—success or denial—is written to
+`docs/_sdlc/hook-events.ndjson` for audit.
+
+**When to prefer `auto.advance` over manual `phase.set`**: when `status.nextAction`
+already suggests `auto.advance`, the strict gate has been checked for you—just run
+it. `phase.set` remains the manual escape hatch (always allowed, soft warnings
+only) for jumping phases, recovering from a stuck gate, or entering `debug`. Use
+`phase.set` when you need to deviate from the auto order or the strict gate denies
+you (e.g. you intentionally want to skip ahead or the next phase's preconditions
+are not yet satisfied by artifacts).
 
 > **`completion.*` is artifact completion, not phase progression.** `completion.design` /
 > `completion.implement` / `completion.test` mean the *required artifacts* for that
