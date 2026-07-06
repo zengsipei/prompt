@@ -2,7 +2,6 @@ import path from "node:path";
 import { currentStatePath, readJsonIfExists, workspaceRoot, writeJson } from "./context.mjs";
 import { phaseCompletion, pendingConfirmations } from "./artifacts.mjs";
 import { currentSessionId, sessionPath } from "./session.mjs";
-
 // 关闭原因：completed 为成功收尾；canceled/wontfix/superseded 为非成功收尾（需 close note）。
 export const CLOSE_REASONS = ["completed", "canceled", "wontfix", "superseded"];
 export const SUCCESSFUL_CLOSE_REASON = "completed";
@@ -41,13 +40,14 @@ export function completionEvidenceReady(state, root = workspaceRoot(), precomput
 // 调用方负责在调用前完成各自的校验（reason 合法性、证据齐全、debug 处理等）；
 // 本函数只负责「写证据 + 转 closed」这段无分支的状态变更。
 export function performClose(state, root = workspaceRoot(), options = {}) {
-  const { reason, note = "", completion, pending, trigger = "manual" } = options;
+  const { reason, note = "", completion, pending, trigger = "manual", sessionName = null } = options;
 
   const closedAt = new Date().toISOString();
   const sessionRecord = readJsonIfExists(sessionPath(root), null);
   const sessionId = sessionRecord?.sessionId || currentSessionId(root) || null;
-  // session name 为 best-effort：会话记录已有则采用，否则留 null（stop-time 命名属后续能力）。
-  const sessionName = sessionRecord?.sessionName || sessionRecord?.name || null;
+  // session name：调用方可传 stop-time / task.close 推断名覆盖（无 session.start 时 sessionRecord
+  // 不存在，靠调用方透传）；否则回退到 session 记录里的名。best-effort，未知仍记 null。
+  const resolvedSessionName = sessionName || sessionRecord?.sessionName || sessionRecord?.name || null;
   const completed = reason === SUCCESSFUL_CLOSE_REASON;
   // 关闭时 debug 是否仍激活——非成功关闭允许带 active debug 关闭，但须把这一事实记进最终证据。
   const debugActiveAtClose = Boolean(state.debugActive);

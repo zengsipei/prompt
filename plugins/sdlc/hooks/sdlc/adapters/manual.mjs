@@ -27,7 +27,7 @@ import { evaluate } from "../core/rules.mjs";
 import { allow, block, printJson } from "../core/result.mjs";
 import { hookCommand, RUNTIME_ROOT } from "../core/runtime.mjs";
 import { nextAction, shortStatusMessage } from "../core/status.mjs";
-import { currentSessionId, sessionPath } from "../core/session.mjs";
+import { applyManualRename, currentSessionId, sessionPath } from "../core/session.mjs";
 import { CLOSE_REASONS, performClose, SUCCESS_EVIDENCE_PHASES, SUCCESSFUL_CLOSE_REASON } from "../core/closure.mjs";
 import { inferTargetPaths, parseArgs } from "./common.mjs";
 
@@ -143,6 +143,16 @@ export function runManual(argv = process.argv.slice(2)) {
       root,
       { requireComplete: args["require-complete"] === true },
     );
+  }
+
+  // 手动覆盖会话名：显式命名并 best-effort 尝试平台 rename；输出平台 rename 是否 applied / unavailable。
+  if (command === "session.rename") {
+    const result = renameSession(args, root);
+    printJson(result);
+    if (result.decision === "deny") {
+      process.exitCode = 2;
+    }
+    return;
   }
 
   // 显式关闭任务：completed 需 design/implement/test 证据齐全且无待确认；
@@ -439,6 +449,28 @@ export function closeDebug(args = {}, root = workspaceRoot()) {
   );
 }
 
+// 手动会话重命名：显式覆盖 session 名，best-effort 尝试平台 rename；返回平台 rename 反馈。
+// 返回 result（不 printJson），供 runManual 与运行时测试共用同一高层 seam（#14）。
+export function renameSession(args = {}, root = workspaceRoot()) {
+  const name = typeof args.name === "string" ? args.name.trim() : "";
+  if (!name) {
+    return block("session.rename 需要 --name <会话名>。");
+  }
+
+  // applyManualRename 负责写 session 记录 + best-effort 平台 rename，返回平台结果。
+  const { rename } = applyManualRename(name, root);
+  const feedback = rename.available
+    ? rename.applied
+      ? "平台 session rename 已应用。"
+      : `平台 session rename 被拒绝（${rename.error || "unknown"}）；本地会话名已记录。`
+    : "平台 session rename 不可用；本地会话名已记录。";
+
+  return allow(`会话名已设为「${name}」。${feedback}`, {
+    sessionName: name,
+    platformRename: rename,
+  });
+}
+
 function runEvent(event, root, options = {}) {
   const result = evaluate(
     {
@@ -468,6 +500,7 @@ function help() {
       `${hookCommand()} step locate-code`,
       `${hookCommand()} tool.before --action fs.edit --path src/foo.ts`,
       `${hookCommand()} session.stop --require-complete`,
+      `${hookCommand()} session.rename --name "会话名"`,
       `${hookCommand()} task.close --reason completed`,
       `${hookCommand()} task.close --reason canceled|wontfix|superseded --note "原因"`,
       `${hookCommand()} debug.close --note "排查结论"`,

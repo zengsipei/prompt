@@ -14,7 +14,7 @@ import {
 } from "./artifacts.mjs";
 import { allow, block, warn } from "./result.mjs";
 import { detectRedline } from "./redlines.mjs";
-import { currentSessionId, diagnosticsEntry, recordDiagnostics, startSession } from "./session.mjs";
+import { currentSessionId, diagnosticsEntry, recordDiagnostics, recordInferredSessionName, startSession } from "./session.mjs";
 import { completionEvidenceReady, performClose } from "./closure.mjs";
 import { shortStatusMessage } from "./status.mjs";
 
@@ -458,6 +458,11 @@ function evaluateStop(event, state, root, options = {}) {
     return allow("Closed lifecycle; no active task to stop-gate.");
   }
 
+  // #14：每次 session.stop 都 best-effort 记录推断会话名（自动路径，平台 rename 失败静默）。
+  // 在读完 state.phase 后、任何关闭动作前采集，命名反映 stop 时刻的阶段 / 任务信号；
+  // 若随后兜底自动关闭，则把该名透传进关闭证据（performClose 的 sessionName 选项）。
+  const { name: inferredSessionName } = recordInferredSessionName(state, root, "stop");
+
   const profile = sdlcProfile(state);
   const phase = event.phase || state.phase;
   const complete = phaseCompletion(state, root);
@@ -488,6 +493,7 @@ function evaluateStop(event, state, root, options = {}) {
         completion: complete,
         pending,
         trigger: "session.stop",
+        sessionName: inferredSessionName,
       });
       // 同步本地 state 至 closed/null：使 evaluate 末尾的 saveHookState 跳过已关闭任务的 hook-state 写入；
       // 全局事件审计（hook-events.ndjson / session-diagnostics.json）仍照常记录本次 stop。

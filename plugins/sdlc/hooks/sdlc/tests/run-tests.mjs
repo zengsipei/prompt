@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { evaluate } from "../core/rules.mjs";
 import { allow, asCodexHookJson, asHookJson, block, codexHookFailureJson, hookFailureJson, warn } from "../core/result.mjs";
 import { currentStatePath, eventsPath, hookStatePath, loadCurrentState, readJsonIfExists, writeJson } from "../core/context.mjs";
-import { currentSessionId, diagnosticsPath, sessionPath } from "../core/session.mjs";
+import { applyManualRename, currentSessionId, diagnosticsPath, recordInferredSessionName, sessionPath } from "../core/session.mjs";
 import {
   implementationAllowedPaths,
   inferAllowedPathsFromGit,
@@ -13,7 +13,7 @@ import {
   phasePreconditionsUnmet,
 } from "../core/artifacts.mjs";
 import { loadRegistry, resolveStep } from "../core/registry.mjs";
-import { closeDebug, closeTask, setPhase, statusPayload } from "../adapters/manual.mjs";
+import { closeDebug, closeTask, renameSession, setPhase, statusPayload } from "../adapters/manual.mjs";
 import { DIAGNOSTICS_LOCATION, shortStatusMessage } from "../core/status.mjs";
 import { RUNTIME_ROOT, hookCommand, resolveRuntimeRoot } from "../core/runtime.mjs";
 import {
@@ -1412,6 +1412,111 @@ function run() {
     assert.equal(autoClosure.closeTrigger, "session.stop");
     assert.equal(autoClosure.autoClosed, true);
     assert.notEqual(autoClosure.note, manualClosure.note, "note 区分兜底来源");
+  }
+
+  // #14 stop-time 会话命名 + 手动 rename（AC 覆盖）。
+  // 14a session.stop 兜底自动关闭时记录推断名：slug + 当前阶段（无事件/诊断时降级为此）。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const sessionId = currentSessionId(root);
+
+    const result = evaluate({ name: "session.stop", platform: "test" }, { cwd: root });
+    assert.equal(result.decision, "allow");
+    assert.equal(result.autoClosed, true, "证据齐全时 stop 兜底自动关闭");
+
+    const closure = readJsonIfExists(path.join(root, "docs", "login-fix", "onlyAI", "closure.json"), null);
+    assert.equal(closure.sessionName, "login-fix: test", "stop-time 推断名 = slug:phase");
+    assert.equal(closure.sessionId, sessionId);
+
+    const session = readJsonIfExists(sessionPath(root), null);
+    assert.equal(session.sessionName, "login-fix: test", "session 记录带推断名");
+    assert.equal(session.sessionNameSource, "stop", "命名来源标记为 stop");
+    assert.equal(session.platformRename.available, false, "生产路径平台 rename 不可用");
+  }
+
+  // 14b 诊断含测试命令 + 源码路径时，推断名带上 test 标记与触及区域。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const sessionId = currentSessionId(root);
+    // 直接播种诊断历史：测试命令 + 源码路径（按当前 sessionId 归属），模拟跑过测试并改过 src。
+    writeJson(diagnosticsPath(root), {
+      latest: { command: "npm test", targetPaths: ["src/login.ts"], sessionId },
+      history: [{ command: "npm test", targetPaths: ["src/login.ts"], sessionId }],
+    });
+
+    evaluate({ name: "session.stop", platform: "test" }, { cwd: root });
+    const closure = readJsonIfExists(path.join(root, "docs", "login-fix", "onlyAI", "closure.json"), null);
+    assert.equal(closure.sessionName, "login-fix: test: src", "推断名含 test 标记与触及区域");
+  }
+
+  // 14c 手动 rename：写本地名 + 默认平台 rename 不可用、给出显式反馈（AC：手动输出报告平台状态）。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design" });
+    const result = renameSession({ name: "login-auth-flow" }, root);
+    assert.equal(result.decision, "allow");
+    assert.equal(result.sessionName, "login-auth-flow");
+    assert.match(result.message, /平台 session rename 不可用/u, "默认报告平台 rename 不可用");
+    const session = readJsonIfExists(sessionPath(root), null);
+    assert.equal(session.sessionName, "login-auth-flow", "session 记录被手动名覆盖");
+    assert.equal(session.sessionNameSource, "manual", "命名来源标记为 manual");
+    assert.equal(session.platformRename.available, false);
+  }
+
+  // 14c（续）平台 rename 能力可用时：applied / 被拒 两种显式反馈。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "design" });
+    const prev = process.env.SDLC_SESSION_RENAME;
+    try {
+      process.env.SDLC_SESSION_RENAME = "ok";
+      const ok = renameSession({ name: "flow-a" }, root);
+      assert.match(ok.message, /已应用/u, "平台 rename 可用时报告已应用");
+      assert.equal(ok.platformRename.available, true);
+      assert.equal(ok.platformRename.applied, true);
+
+      process.env.SDLC_SESSION_RENAME = "fail";
+      const rejected = renameSession({ name: "flow-b" }, root);
+      assert.match(rejected.message, /被拒绝/u, "平台 rename 被拒时报告被拒绝");
+      assert.equal(rejected.platformRename.available, true);
+      assert.equal(rejected.platformRename.applied, false, "被拒记录为未应用");
+      assert.ok(rejected.platformRename.error, "被拒带错误原因");
+    } finally {
+      if (prev === undefined) delete process.env.SDLC_SESSION_RENAME;
+      else process.env.SDLC_SESSION_RENAME = prev;
+    }
+  }
+
+  // 14d 自动路径平台 rename 失败时静默：不阻断生命周期、result 不报平台错误，仅 session 记录留存。
+  {
+    const root = makeWorkspace();
+    seedCurrent(root, { phase: "test", profile: "lite" });
+    writeJson(path.join(root, "docs", "login-fix", "onlyAI", "task-plan.json"), { tasks: [{ id: "T-01", status: "done" }] });
+    write(path.join(root, "docs", "login-fix", "onlyAI", "verification.md"), "ok\n");
+    evaluate({ name: "session.start", platform: "test" }, { cwd: root });
+    const prev = process.env.SDLC_SESSION_RENAME;
+    try {
+      process.env.SDLC_SESSION_RENAME = "fail";
+      const result = evaluate({ name: "session.stop", platform: "test" }, { cwd: root });
+      assert.equal(result.decision, "allow", "自动路径平台 rename 失败不阻断生命周期");
+      assert.equal(result.autoClosed, true);
+      assert.doesNotMatch(result.message, /rename|重命名|被拒绝/u, "自动路径对平台失败保持静默");
+      const session = readJsonIfExists(sessionPath(root), null);
+      assert.equal(session.platformRename.available, true);
+      assert.equal(session.platformRename.applied, false, "失败记录为未应用");
+      assert.ok(session.platformRename.error, "失败原因留存于 session 记录");
+    } finally {
+      if (prev === undefined) delete process.env.SDLC_SESSION_RENAME;
+      else process.env.SDLC_SESSION_RENAME = prev;
+    }
   }
 
   // #13 紧凑 status / 注入：status --short 与 hook 注入同源紧凑视图（≤4 行），含任务/关闭状态、
